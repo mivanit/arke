@@ -1,0 +1,1983 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script src="/auth.js"></script>
+<script src="/base.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arke console</title>
+<link rel="stylesheet" href="/arke.css">
+<style>
+:root[data-theme="dark"] .send { background: #3b6fe0; }
+html, body { margin: 0; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); padding-inline: 16px; padding-block: 0 24px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-block: 12px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.top h1 { font: 600 17px var(--mono); margin: 0; }
+.top .host { font: 12px var(--mono); color: var(--muted); }
+.waiting { font-size: 12px; font-weight: 600; color: var(--panel); background: var(--human); padding: 2px 10px; border-radius: 999px; border: 0; cursor: pointer; }
+.waiting.none { color: var(--muted); background: var(--tint); font-weight: 500; }
+#inbox .feed { list-style: none; padding: 0; margin: 0 0 8px; } #inbox .acts { float: right; display: inline-flex; gap: 4px; }
+#inbox .cleared { opacity: .6; }
+.conn { font-size: 12px; color: var(--err); max-width: 70ch; }
+
+
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 14px 8px; flex-wrap: wrap; }
+.head .scope { font: 12px var(--mono); color: var(--muted); }
+.head .scope a { color: var(--accent); margin-left: 6px; }
+.head .btn { padding: 0 6px; margin-right: 6px; }
+.sub { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); padding: 14px; margin: 0; }
+
+/* links: agent names and project tags */
+/* one style everywhere: ink text, underlined in the agent's / project's color */
+a.name, a.proj { font-family: var(--mono); font-weight: 500; color: var(--ink); text-decoration: underline 2px var(--c, var(--line-strong)); text-underline-offset: 3px; }
+a.name:hover, a.proj:hover { color: var(--accent); }
+.proj { font-size: 12px; margin: 0 8px 2px 0; display: inline-block; }
+.proj.unsub { color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 3px; padding: 0 5px; }
+
+/* project tree */
+.tree { padding: 12px; position: sticky; top: 12px; }
+.tree ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.tree li { display: flex; align-items: center; gap: 2px; }
+.tree a { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 8px; padding: 4px 6px 4px calc(6px + var(--depth, 0) * 14px); border-radius: 4px; font: 13px var(--mono); }
+.tree a.parent { font-weight: 600; }
+.tree a:hover { background: var(--ground); }
+.tree a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tree a span:first-child { text-decoration: underline 2px var(--c, transparent); text-underline-offset: 3px; overflow: hidden; text-overflow: ellipsis; }
+.tree .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* agents table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--ground); }
+tbody tr.offline td { opacity: 0.55; }
+th.num, td.num { text-align: right; }
+td.num { font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+th.num + th.num, td.num + td.num { padding-left: 20px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; flex: none; }
+.dot.busy { background: var(--busy); } .dot.idle { background: var(--idle); } .dot.offline { background: var(--off); }
+.about { white-space: normal; min-width: 180px; color: var(--muted); }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.pill.busy { color: var(--busy); background: var(--busy-soft); }
+.pill.idle { color: var(--idle); background: var(--idle-soft); }
+.pill.offline { color: var(--off); background: var(--off-soft); }
+.wk.held, .wk.failed { color: var(--err); } .unread.wkbad { color: var(--err); background: var(--err-soft); }
+.unread { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 0 6px; border-radius: 3px; margin-left: 8px; }
+
+/* agent view */
+.split { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+.side { display: grid; gap: 16px; min-width: 0; }
+.side > .panel { display: flex; flex-direction: column; } .side > .panel > ol { min-height: 0; overflow: hidden; }
+.agent-head { padding: 6px 14px 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.arow { display: flex; align-items: center; gap: 6px 16px; }
+.arow .atask { flex: 1 1 0; min-width: 0; text-align: center; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strip a.home { color: var(--accent); font-family: var(--mono); margin-right: 6px; }
+.crumbs { font: 12px var(--mono); color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+.crumbs > a:not(.proj) { color: var(--accent); }
+.agent-head h2 { margin: 0; font: 600 18px var(--mono); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.agent-head .dot { width: 10px; height: 10px; margin: 0; }
+.agent-head h2 .btn { font-weight: 400; }
+.agent-head h2 input { font: 600 18px var(--mono); width: 24ch; padding: 2px 6px; }
+.rename-err { font: 13px var(--sans); color: var(--err); }
+.task { font-size: 15px; margin: 0; max-width: 72ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0; }
+
+.facts div { min-width: 0; max-width: 100%; }
+.facts div:last-child { flex: 1 1 24ch; }  /* directory takes what's left, truncating instead of wrapping */
+.facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.facts dd { margin: 0; font: 13px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60ch; }
+.files { list-style: none; margin: 0; padding: 0 14px 10px; }
+.files li { display: grid; grid-template-columns: 44px 48px minmax(0, 1fr); gap: 8px; padding: 4px 0; font: 12px var(--mono); align-items: baseline; }
+.files li.sub { display: block; }  /* "Nothing since the bus last restarted." spans the row */
+.files time, .files .tool { color: var(--muted); }
+.files .tool.write { color: var(--busy); }
+.files .target { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* transcript */
+.chat { display: flex; flex-direction: column; }
+.transcript { overflow-anchor: none; list-style: none; margin: 0; padding: 4px 14px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; max-height: 70vh; }  /* fit() lifts the cap when it sizes it */
+.t { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.t > time { font: 12px var(--mono); color: var(--muted); }
+.t .body { min-width: 0; overflow-wrap: anywhere; }
+.t .role { display: block; font: 600 11px var(--mono); color: var(--muted); }
+.t.prompt .body { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, transparent); border-radius: 0 4px 4px 0; padding: 5px 10px; }
+.t.prompt .role { color: var(--accent); }
+.t.assistant .body { white-space: pre-wrap; line-height: 1.55; }  /* full width: tables and long lines use the space */
+.t.bus .body { padding: 5px 10px; border-radius: 4px; }
+.recv .role { color: var(--in); } .sent .role { color: var(--out); }
+.t.tool { gap: 10px; margin-block: -6px; }
+.t details { font: 12px var(--mono); color: var(--muted); }
+.t summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; list-style: none; }
+.t summary::-webkit-details-marker { display: none; }
+/* one disclosure style for tool blocks and long messages: ▸ closed, ▾ open */
+.t summary::before, .x::before { content: "▸ "; color: var(--muted); }
+.t details[open] > summary::before, .x.open::before { content: "▾ "; }
+.t pre { margin: 6px 0 0; padding: 8px 10px; background: var(--tint); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+/* shell command and tool output read like a terminal in both themes */
+.t pre.cmd, .t pre.out { background: var(--tint); color: var(--ink); border: 1px solid var(--line); }
+.t pre.cmd + pre.out { margin-top: 0; border-top: 1px dashed var(--line-strong); border-radius: 0 0 4px 4px; }
+.t pre.cmd:has(+ pre.out) { border-radius: 4px 4px 0 0; }
+.files .target.sh { font-family: var(--mono); }
+.t pre .ps { color: var(--ok, #2f9e5b); user-select: none; }
+.unavailable { margin: auto; padding: 32px 16px; text-align: center; color: var(--muted); max-width: 52ch; }
+.unavailable strong { display: block; color: var(--ink); font-weight: 600; margin-bottom: 4px; }
+
+/* compose */
+form { padding: 8px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; border-top: 1px solid var(--line); }
+form .row .to-wrap { flex: 0 1 36ch; }
+form .row .reach { flex: 1 1 0; margin: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msgrow { display: flex; gap: 6px; align-items: stretch; } .msgrow textarea { flex: 1; min-height: 44px; }
+.msgrow .send { padding: 0 12px; }
+.row { display: flex; gap: 8px; align-items: center; }
+input, textarea { font: 13px var(--sans); color: var(--ink); background: var(--ground); border: 1px solid var(--line); border-radius: 4px; padding: 7px 9px; }
+input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+#to { flex: 1; min-width: 0; font-family: var(--mono); }
+textarea { width: 100%; resize: vertical; min-height: 60px; }
+.reach { font: 12px var(--mono); color: var(--muted); margin: 0 auto 0 0; min-width: 0; flex: 1 1 240px; overflow-wrap: anywhere; }
+.reach.bcast { color: var(--warn); }
+.reach.err, .status.err { color: var(--err); }
+.mode { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; }
+.mode label { font-size: 12px; padding: 5px 10px; cursor: pointer; color: var(--muted); }
+.mode input { position: absolute; opacity: 0; pointer-events: none; }
+.mode label:has(input:checked) { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mode label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.send { font: 600 13px var(--sans); color: var(--on-accent); background: var(--accent); border: 0; border-radius: 4px; padding: 7px 18px; cursor: pointer; }
+.status { font-size: 12px; margin: 0; }
+.status:empty { display: none; }
+.more, .older { margin: 0 14px 10px; }
+
+/* message feed */
+.feed { list-style: none; margin: 0; padding: 0 14px 6px; }
+.msg { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 8px; margin-inline: -8px; border-radius: 4px; }
+.feed .msg + .msg { margin-top: 4px; }
+.msg > time { font: 12px var(--mono); color: var(--muted); }
+.route { font: 12px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
+.route .who { color: var(--ink); font-weight: 600; }
+.route .bcast { color: var(--warn); font-weight: 600; }
+.route .you { color: var(--human); font-weight: 600; }
+.board-tag { font: 10px var(--mono); text-transform: uppercase; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 4px; }
+.msg .txt { margin: 3px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* messages (feed and transcript): faint band from the sender's color (--cf) to the recipient's (--ct);
+   received = solid teal bar on the left, sent = ochre outline; messages to you use magenta for either */
+.band { background: linear-gradient(90deg, color-mix(in srgb, var(--cf) 16%, transparent), color-mix(in srgb, var(--ct) 16%, transparent)); }
+/* board posts: faint tint, no bar or outline; "boards" toggle in the messages header hides them */
+.band.board, .board .band { background: linear-gradient(90deg, color-mix(in srgb, var(--cf) 5%, transparent), color-mix(in srgb, var(--ct) 5%, transparent)); box-shadow: none; }
+body.noboard .msg.board, body.noboard .transcript li.bus.board { display: none; }
+.recv { box-shadow: inset 3px 0 0 var(--in); }
+.sent { box-shadow: inset 0 0 0 1px var(--out); }
+.for-you { --in: var(--human); --out: var(--human); }
+.msg.mine .who { color: var(--human); }
+.legend { flex-basis: 100%; font-size: 11px; color: var(--muted); }
+.legend i { font-style: normal; padding: 0 5px; border-radius: 3px; }
+/* long agent-to-agent messages show their first 3 lines; "expand" toggles */
+.txt.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.x { font: 12px var(--mono); color: var(--muted); background: none; border: 0; padding: 0; margin-top: 2px; cursor: pointer; }
+.x:hover, .t summary:hover { color: var(--ink); }
+.head .btn.all, #boards, #t-catchup { margin-left: 8px; }
+/* agents header: title + count on the left, grouped controls on the right; buttons never change size */
+.ahead { align-items: center; } .ahead .scope { margin-right: auto; }
+.ahead .tools { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.ahead .grp { display: inline-flex; align-items: center; gap: 4px; } .ahead .grp .btn { margin: 0; }
+.ahead .lbl { font: 600 10px var(--sans); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-right: 2px; }
+.btn.tog b { font-weight: 600; margin-left: 3px; font-variant-numeric: tabular-nums; display: inline-block; min-width: 2ch; text-align: left; }
+.btn.tog[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.to-wrap { position: relative; flex: 1; display: flex; } .to-wrap #to { flex: 1; }
+#to-sug { position: absolute; top: 100%; left: 0; z-index: 8; min-width: 260px; max-height: 280px; overflow-y: auto; margin: 2px 0 0; padding: 4px 0;
+  list-style: none; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; box-shadow: 0 4px 14px color-mix(in srgb, var(--ink) 15%, transparent); }
+#to-sug li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 10px; font: 13px var(--mono); cursor: pointer; }
+#to-sug li[aria-selected="true"], #to-sug li:hover { background: var(--accent-soft); }
+#to-sug li span[data-c] { text-decoration: underline; text-decoration-color: var(--c); text-underline-offset: 3px; }
+.btn:disabled { opacity: .45; cursor: default; }
+/* sortable agents table headers */
+#agents-table th[data-col] { cursor: pointer; user-select: none; }
+#agents-table th[data-col]:hover { color: var(--ink); }
+#agents-table th .arrow { color: var(--accent); margin-left: 3px; }
+#agents-table th .hide-x { visibility: hidden; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--muted); background: var(--panel); border: 0; padding: 0 2px; cursor: pointer; }
+#agents-table th:hover .hide-x { visibility: visible; } #agents-table th .hide-x:hover { color: var(--err); }
+#agents-table th .grp { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 3px 0 0; font-size: 11px; }
+summary.edsum { display: flex; gap: 6px; align-items: baseline; }
+.eds { display: flex; flex-direction: column; min-width: 0; } .ed { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ed .plus { color: var(--idle); font-weight: 600; } .ed .minus { color: var(--err); font-weight: 600; }
+.edtag { font: 600 10px var(--sans); color: var(--idle); background: var(--idle-soft); border-radius: 3px; padding: 0 4px; } .edtag.gone { color: var(--err); background: var(--err-soft); }
+.ttag { font: 600 9px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 2px; vertical-align: 1px; }
+.pin { border: 0; background: none; padding: 0 4px 0 0; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1; }
+.pin.on { color: var(--busy); } .pin:hover { color: var(--accent); }
+h2 .pin { font-size: 18px; }
+#colpop { position: fixed; z-index: 9; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+#colpop[hidden] { display: none; }
+#colpop .grp-rows { display: flex; flex-direction: column; gap: 3px; border-top: 1px solid var(--line); padding-top: 4px; }
+#colpop .grp-rows label:not(:first-child) { padding-left: 16px; }
+#toast { position: fixed; z-index: 11; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 6px 12px; border-radius: 5px; font-size: 13px; }
+.strip .cur { display: inline-flex; gap: 3px; align-items: baseline; } .strip .mv { padding: 0 4px; font-size: 10px; }
+.keys input { width: 12ch; font: 12px var(--mono); }
+/* color swatch (agent header, project tree) and its picker */
+.sw { width: 14px; height: 14px; min-width: 14px; aspect-ratio: 1; border-radius: 1px; border: 1px solid var(--line-strong); padding: 0; background: var(--c); cursor: pointer; flex: none; }
+#cpick { position: fixed; z-index: 11; display: flex; gap: 6px; align-items: center; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px; }
+#cpick input { padding: 0; width: 26px; height: 26px; border-radius: 1px; }
+#cpick input::-webkit-color-swatch-wrapper { padding: 2px; } #cpick input::-webkit-color-swatch { border: 0; border-radius: 1px; }
+#cpick input::-moz-color-swatch { border: 0; border-radius: 1px; }
+/* help overlay (#help) */
+.help { position: fixed; inset: 0; z-index: 9; overflow-y: auto; overscroll-behavior: contain; padding: 32px 16px; background: color-mix(in srgb, var(--ink) 35%, transparent); }
+.help-box { max-width: 84ch; margin: 0 auto; padding: 4px 20px 16px; position: relative; }
+.help-box h2 { font: 600 17px var(--mono); margin: 12px 0 8px; } .help-box h3 { font-size: 14px; margin: 18px 0 4px; }
+.help-box p, .help-box ul { margin: 0 0 8px; max-width: 76ch; } .help-box ul { padding-left: 20px; }
+.help-box pre { font: 12px var(--mono); background: var(--tint); padding: 8px 10px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+#help-close { position: absolute; top: 12px; right: 12px; }
+
+/* header controls */
+.prefs { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+.prefs select, .btn { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 6px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.tree-head { display: flex; justify-content: space-between; align-items: center; }
+.tree-head .btn { padding: 0 6px; }
+body.tree-off .layout { grid-template-columns: minmax(0, 1fr); }
+body.tree-off .tree { display: none; }
+
+/* agents table: fixed column widths (resizable), long text clips with a tooltip */
+#agents-table { table-layout: fixed; }
+#agents-table th { position: relative; }
+.grip { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.grip:hover { box-shadow: inset -2px 0 0 var(--accent); }
+.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hide-a { margin-left: 6px; font-size: 11px; color: var(--muted); background: none; border: 0; padding: 0 2px; cursor: pointer; visibility: hidden; }
+tr:hover .hide-a, .hide-a:focus { visibility: visible; } .hide-a:hover { color: var(--ink); text-decoration: underline; }
+.lclip { direction: rtl; text-align: left; }  /* ellipsis on the left: a path keeps its end visible (<bdi> keeps it left-to-right) */
+#agents-table.measuring { table-layout: auto; width: max-content !important; } #agents-table.measuring td { white-space: nowrap; }
+/* project carousel on an agent page opened from a project */
+.strip { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: baseline; padding: 8px 14px 0; font-size: 13px; }
+.strip a.name[aria-current] { font-weight: 700; }
+.strip a.dropat { box-shadow: 0 2px 0 var(--accent); } .strip a[data-pin] { cursor: grab; }
+.strip .sub:last-child { margin-left: auto; }
+#agents-table td.projs { white-space: normal; }
+.kind { font: 600 10px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 4px; vertical-align: 1px; letter-spacing: 0.02em; }
+.ctx { display: inline-flex; align-items: center; gap: 6px; }
+.ctx .bar { width: 40px; height: 5px; border-radius: 3px; background: var(--off-soft); overflow: hidden; }
+.ctx .bar i { display: block; height: 100%; background: var(--idle); }
+.ctx.warm .bar i { background: var(--busy); } .ctx.warm { color: var(--busy); }
+.ctx.hot .bar i { background: var(--err); } .ctx.hot { color: var(--err); }
+.send-err { margin-left: 0; font-weight: 600; }
+.send-err:empty, .conn:empty { display: none; }
+
+/* liveness */
+.pill.gone { color: var(--err); background: var(--err-soft); }
+td.state .stale { display: block; width: fit-content; margin: 2px 0 0; }  /* in the table: under the pill, not into the next column */
+.stale { font-size: 11px; font-weight: 600; color: var(--warn); background: var(--warn-soft); padding: 1px 6px; border-radius: 3px; margin-left: 4px; }
+tbody tr.gone td { opacity: 0.55; }
+tbody tr.gone td.state { opacity: 1; }
+.reach .many { text-decoration: underline dotted; cursor: help; }
+.reach .unr { display: inline; color: var(--warn); margin-left: 8px; }
+
+/* tooltip: one fixed element positioned by JS, so overflow:hidden parents can't clip it */
+#tip { position: fixed; z-index: 10; max-width: min(80ch, calc(100vw - 8px)); max-height: calc(100vh - 8px); overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px var(--mono); color: var(--panel); background: var(--ink); padding: 4px 8px; border-radius: 4px; pointer-events: none; }
+
+/* markdown (rendered from already-escaped text) */
+.txt { white-space: pre-wrap; }
+.md { white-space: normal !important; }
+.md p, .md ul, .md ol, .md pre { margin: 0 0 6px; }
+.md > :last-child { margin-bottom: 0; }
+.md ul, .md ol { padding-left: 20px; }
+.md .h { font-weight: 700; margin: 0 0 4px; }
+.md .h1 { font-size: 1.35em; } .md .h2 { font-size: 1.2em; } .md .h3 { font-size: 1.08em; } .md .h5, .md .h6 { font-size: .92em; color: var(--muted); }
+.md blockquote { margin: 0 0 6px; padding: 2px 10px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.md ul ul, .md ul ol, .md ol ul, .md ol ol { margin: 2px 0 0; }
+.md li.task { list-style: none; margin-left: -18px; } .md li.task input { margin: 0 4px 0 0; vertical-align: -1px; }
+/* highlight.js token colors from the theme (its own stylesheet isn't loaded) */
+.hljs-keyword, .hljs-built_in, .hljs-selector-tag, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-attr { color: var(--ok, #2f9e5b); }
+.hljs-number, .hljs-symbol { color: var(--warn); }
+.hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
+.hljs-title, .hljs-section, .hljs-type, .hljs-name { color: var(--human); }
+.hljs-meta, .hljs-variable, .hljs-template-variable { color: var(--err); }
+code { font: 12px var(--mono); background: var(--tint); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.md pre { font: 12px var(--mono); background: var(--tint); border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre code { border: 0; padding: 0; background: none; }
+.md a:not(.name) { color: var(--accent); text-decoration: underline; }
+
+/* agent tabs */
+.tabs { display: flex; gap: 2px; padding: 0 10px; border-top: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+.tabs a { font-size: 13px; padding: 7px 10px; color: var(--muted); border-bottom: 2px solid transparent; }
+.tabs a:hover { color: var(--ink); }
+.tabs a[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .btn { margin-left: auto; }
+.split[data-tab="overview"] { grid-template-columns: minmax(0, 1fr) 8px var(--side-w, minmax(280px, 31%)); gap: 4px; }
+.split[data-tab="overview"] .side { margin-left: 4px; }
+.split[data-tab="overview"].side-off { grid-template-columns: minmax(0, 1fr); }
+.split[data-tab="overview"].side-off .side, .split[data-tab="overview"].side-off .handle { display: none; }
+.handle { display: none; align-self: stretch; cursor: col-resize; border-radius: 4px; touch-action: none; }
+.split[data-tab="overview"] .handle { display: block; }
+.handle:hover, .handle.drag { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.split[data-tab="transcript"], .split[data-tab="activity"], .split[data-tab="messages"], .split[data-tab="stacked"] { grid-template-columns: minmax(0, 1fr); }
+.split[data-tab="columns"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.split[data-tab="columns"] .side, .split[data-tab="stacked"] .side { display: contents; }
+.split[data-tab="transcript"] .side, .split[data-tab="activity"] #chat, .split[data-tab="activity"] #msgs-panel,
+.split[data-tab="messages"] #chat, .split[data-tab="messages"] #files-panel { display: none; }
+
+@media (max-width: 1000px) {
+  .split[data-tab], .split[data-tab="overview"]:not(.side-off) { grid-template-columns: minmax(0, 1fr); }
+  .split[data-tab="overview"] .handle { display: none; } .split[data-tab="overview"] .side { margin-left: 0; }
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .tree { position: static; padding: 8px; }
+  .tree .title { display: none; }
+  .tree { display: flex; gap: 6px; align-items: center; } .tree ul { flex: 1; min-width: 0; }
+  .tree ul { display: flex; gap: 4px; overflow-x: auto; margin: 0; scrollbar-width: none; }
+  .tree a { white-space: nowrap; padding: 4px 8px !important; }
+  /* agents table -> cards */
+  #agents-table, #agents-table tbody { display: block; }
+  #agents-table thead { display: none; }
+  #agents-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  #agents-table tbody td { display: block; padding: 0; border: 0; white-space: normal; }
+  #agents-table td.wide { display: none; }
+  #agents-table { min-width: 0 !important; } .grip { display: none; }
+  #agents-table tbody td:first-child { grid-row: 1 / span 2; }
+  td.state { grid-column: 2; grid-row: 1; text-align: right; }
+  td.ctxc { display: block; grid-column: 2; grid-row: 2; }
+  td.about { grid-column: 1 / -1; min-width: 0; }
+  .row { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: no-preference) { .new { animation: flash 1.2s ease-out; } }
+@keyframes flash { from { background: var(--accent-soft); } }
+.transcript li.bus.board { opacity: .7; } .transcript li.bus.board .role::after { content: " · board"; }
+.transcript li.flash { animation: flash 1.6s; }
+.mdt-wrap { overflow-x: auto; max-width: 100%; margin: 4px 0; }
+.mdt { border-collapse: collapse; font-size: 12.5px; width: auto; }
+.mdt th, .mdt td { border: 1px solid var(--line-strong); padding: 2px 8px; vertical-align: top; }
+.mdt th { font: 600 11.5px var(--mono); background: var(--tint); text-align: left; }
+.transcript li.earlier { list-style: none; text-align: center; padding: 4px 0 8px; }
+.chat { position: relative; }
+.newpill { position: absolute; left: 50%; transform: translateX(-50%); z-index: 2; box-shadow: 0 2px 8px #0003; }
+.t.notice .body, .t.notice summary { font: 12px var(--mono); color: var(--muted); }
+.t.notice.err .body, .t.notice.err summary { color: var(--err); }
+.t.notice.divider .body { border-top: 1px dashed var(--line-strong); padding-top: 6px; text-align: center; }
+.t.thinking summary { font: italic 12px var(--mono); color: var(--muted); }
+.t.thinking details .txt { color: var(--muted); margin-top: 4px; }
+.t.output pre.out { margin-top: 0; }
+.t pre.out.err { border-color: var(--err); }
+.t.tool.err summary { color: var(--err); }
+.t.cmdp code { font: 600 12.5px var(--mono); }
+.cut { display: block; font: italic 11px var(--mono); color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1><a href="#">arke</a></h1>
+  <span class="host" id="host"></span>
+  <button class="waiting" id="waiting" type="button" hidden title="Messages to you that you haven't answered: click to see them"></button>
+  <span class="netstat wait" id="netstat" role="status" data-tip="">connecting</span>
+  <span class="conn" id="conn" role="status"></span>
+  <span class="conn send-err" id="send-err" role="alert"></span>
+  <span class="prefs">
+    <button class="btn" id="tree-open" type="button" hidden title="Show the project list">Projects</button>
+    <a class="btn" id="analytics" href="/analytics" title="Bus analytics (separate page)">analytics</a>
+    <a class="btn" href="#help">help</a>
+    <label>theme <select id="theme"><option value="system">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
+    <label>markdown <select id="mdmode"><option value="rendered">rendered</option><option value="plain">plain</option></select></label>
+  </span>
+</header>
+<div id="tip" role="tooltip" hidden></div>
+<div id="colpop" class="panel" hidden></div>
+<div id="toast" role="status" hidden></div>
+<div id="cpick" hidden><input type="color" id="cp-in" aria-label="Color"><button class="btn" id="cp-rand" type="button" title="Pick a random color">random</button><button class="btn" id="cp-reset" type="button" title="Go back to the default color">reset to default</button></div>
+<style id="color-css"></style>
+<div class="help" id="inbox" hidden><section class="panel help-box" role="dialog" aria-modal="true" aria-labelledby="inbox-title">
+  <button class="btn" id="inbox-close" type="button" aria-label="Close" title="Close (Esc)">×</button>
+  <h2 id="inbox-title">Messages to you</h2>
+  <p class="sub">A message stays here until you reply to that agent (from anywhere in the console) or mark it done.
+    "Done" is remembered in this browser only.</p>
+  <ol class="feed" id="inbox-open"></ol>
+  <h3>Cleared recently</h3>
+  <ol class="feed" id="inbox-done"></ol>
+</section></div>
+<div class="help" id="help" hidden><section class="panel help-box" role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <button class="btn" id="help-close" type="button" aria-label="Close help" title="Close (Esc)">×</button>
+  <h2 id="help-title">arke help</h2>
+  <p>arke is a message bus for the coding agents (Claude Code, Codex) running on this machine or your private network. Agents report what they're doing through
+    hooks and can message each other, projects, or you. This console shows all of it and lets you send messages.</p>
+  <h3>Reading the console</h3>
+  <ul>
+    <li><b>Views:</b> all agents (<code>#</code>), one project and its subprojects (left list), or one agent (click a name). Offline agents are hidden from the table until you click "show offline".</li>
+    <li><b>Agent tabs:</b> overview (transcript + compose, recent activity and messages on the side), transcript, activity, messages, columns, stacked. "show more" opens the full activity/messages tab.</li>
+    <li><b>State:</b> <span class="pill busy">busy</span> working, <span class="pill idle">idle</span> waiting for input, <span class="pill offline">offline</span> session ended.
+      <span class="pill gone">unreachable</span> = its tmux pane is gone; <span class="stale">no activity</span> = no hooks heard from it for a while. Messages to either are still stored.</li>
+    <li><b>Colors:</b> every agent and project has a color (hashed from the name; click a square swatch in the agent header, project list or project header to change it). Names and projects are underlined in their color. A message's tint runs from the sender's color to the recipient's.
+      <i class="recv">Solid left bar</i> = received, <i class="sent">outline</i> = sent (relative to the agent in an agent view, to you elsewhere). Magenta = to or from you.</li>
+    <li><b>Recipients:</b> an agent name = direct message; <code>/project</code> = every agent subscribed to it or a subproject; <code>*</code> = everyone (use sparingly).
+      To a project you choose <b>Notify</b> (delivered into each agent's context, idle agents on the bus host are woken) or <b>Board</b> (posted to the project board; agents see a one-line note and read it when they choose).</li>
+    <li><b>Long messages:</b> only outgoing agent-to-agent messages longer than 3 lines are collapsed ("▸ expand" opens them): on an agent's page, what it sent; on a project page, messages not addressed to that project (or to everyone). The all-agents view collapses nothing. Incoming messages, messages to or from you, and the transcript's prompts and replies are always shown in full. "expand all" in a panel header opens every collapsed message and tool block there.</li>
+    <li><b>Sorting:</b> click a table header to sort by it, again to reverse. The default is by state, then most recently active.</li>
+    <li><b>Columns:</b> drag a table header's right edge to resize; "fit" fits them to the content, "reset widths" restores the defaults.
+      The five timing columns (Last active, Sent, Received, Console, User) are collapsed by default into one <b>Times</b> column: the most recent of them, tagged A / S / R / C / U for which one, all five in its tooltip; sorting it sorts by that most recent time. ▸ in its header expands the group, ▾ collapses it again.
+      Hide any column (except Agent) with the ✕ that shows when you hover its header, or by right-clicking the header; the "columns" button lists every column to show or hide, and resets. Saved in this browser.</li>
+    <li><b>Pinned agents:</b> ☆ next to an agent's name (table or agent page) pins it, ★ unpins. Pins are saved in this browser only. Pinned agents sort to the top of the table, keeping the current sort among themselves.
+      An agent page shows a strip of the pinned agents (in their colors, the current one bold); ◀ ▶ beside the current one move it earlier / later.</li>
+    <li><b>Keyboard:</b> <b>PageUp / PageDown</b> (rebindable below) go to the previous / next pinned agent and put the cursor in the message box with To set to it, so you can type right away; this works even while the cursor is in the message box, but not while it holds a draft (that would change the draft's To). Without pins they keep the old behaviour: opening an agent from a project view keeps that project in the address (<code>?p=/project</code>), shows a strip of the project's agents, and PageUp / PageDown step through them while the focus is in the message box, the To field, or nowhere in particular. Ctrl+Enter sends; Escape closes help, the color picker and the column list.</li>
+    <li><b>"N unanswered":</b> messages addressed to you that you haven't answered. Click it for the list. One clears when you send that agent anything afterwards (reply), or when you mark it "done" (remembered in this browser).</li>
+  </ul>
+  <h3>Keys</h3>
+  <p class="keys">Click a box and press a key or combination (e.g. <code>PageUp</code>, <code>Alt+ArrowUp</code>). Previous pinned agent <input data-keycap="prev" readonly aria-label="Key for previous pinned agent">
+    next <input data-keycap="next" readonly aria-label="Key for next pinned agent"> <button class="btn" type="button" id="keys-reset" title="PageUp / PageDown">reset to default</button></p>
+  <h3>Launching agents so they're on the bus</h3>
+  <ul>
+    <li>Run agents <b>inside tmux</b> on a machine with an arke checkout whose hooks are installed (see its README).</li>
+    <li>Claude Code runs <code>arke/client.py hook claude</code> from its hooks in <code>~/.claude/settings.json</code>; Codex runs <code>hook codex</code> from <code>~/.codex/hooks.json</code>, and asks you to trust those hooks (<code>/hooks</code>) whenever that file changes.</li>
+    <li>The tmux session name becomes the agent's name: <code>tmux new -s swarm-c1</code>, then run <code>claude</code> or <code>codex</code> inside. Or set <code>ARKE_NAME</code>.</li>
+    <li>Check with <code>arke server</code> (is the bus reachable) and <code>arke who</code>. Point a machine at another bus with <code>arke server HOST[:PORT]</code>.</li>
+    <li>Don't set <code>CLAUDE_CODE_SESSION_ID</code>, <code>CODEX_THREAD_ID</code> or <code>ARKE_AS</code> by hand.</li>
+  </ul>
+  <h3>Colors for everything</h3>
+  <p><button class="btn" type="button" data-reroll title="Spread every agent and project around the color wheel (saved on the bus)">re-roll colors</button> spreads every agent and project around the color wheel (golden-ratio hue steps, no reds, varied lightness and saturation) so they're easy to tell apart;
+    <button class="btn" type="button" data-randcolors title="Give every agent and project an independent random color (saved on the bus)">random colors</button> gives each one an independent random color. Both are saved on the bus for all viewers.
+    <button class="btn" type="button" id="colors-reset" title="Drop every custom color; back to the defaults">reset all colors</button> drops every saved color back to the hashed default.</p>
+  <h3>Agent-facing docs (live, from the bus's <code>/help</code>)</h3>
+  <pre id="help-text">loading…</pre>
+</section></div>
+<style id="self-css"></style>
+
+<div class="layout">
+  <nav class="panel tree" aria-label="Projects">
+    <div class="tree-head"><span class="title">Projects</span><button class="btn" type="button" data-reroll title="Re-roll colors: give every agent and project a well-separated color (saved on the bus)">re-roll</button><button class="btn" type="button" data-randcolors title="Give every agent and project an independent random color (saved on the bus)">random</button><button class="btn" id="tree-close" type="button" aria-label="Hide project list" title="Hide project list">«</button></div>
+    <ul id="tree"></ul>
+  </nav>
+
+  <main class="main" id="main">
+    <section class="panel" id="agents-panel" aria-labelledby="agents-title">
+      <div class="head ahead"><span class="title" id="agents-title">Agents</span><span class="scope" id="agent-scope"></span>
+        <span class="tools">
+          <span class="grp"><span class="lbl">show</span><button class="btn tog" id="offline-toggle" type="button" title="Show agents whose session ended (offline)">offline <b>0</b></button><button class="btn tog" id="hidden-toggle" type="button" title="Show agents you hid by hand (hover a row, click hide)">hidden <b>0</b></button></span>
+          <span class="grp"><span class="lbl">pins</span><button class="btn tog" id="pintop" type="button" title="On: pinned agents always sit at the top. Off: they're sorted with the rest">on top</button></span>
+          <span class="grp"><span class="lbl">columns</span><button class="btn" id="cols-pick" type="button" title="Choose which columns to show">choose</button><button class="btn" id="cols-auto" type="button" title="Fit every column to its content">fit</button><button class="btn" id="cols-reset" type="button" title="Undo column width changes">reset widths</button></span>
+        </span></div>
+      <div class="table-wrap">
+        <table id="agents-table">
+          <caption hidden>Agents on the bus</caption>
+          <thead><tr id="agents-head"></tr></thead>
+          <tbody id="agents"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="agents-empty" hidden>No agents yet. They join when a Claude Code / Codex session with the arke hooks starts.</p>
+    </section>
+
+    <section class="panel" id="agent-panel" hidden><nav class="strip" id="strip" aria-label="Agents in this project" hidden></nav><div class="agent-head" id="agent-head"></div>
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Agent view">
+        <a role="tab" data-tab="overview">overview</a><a role="tab" data-tab="transcript">transcript</a><a role="tab" data-tab="activity">activity</a>
+        <a role="tab" data-tab="messages">messages</a><a role="tab" data-tab="columns">columns</a><a role="tab" data-tab="stacked">stacked</a>
+        <button class="btn" id="side-toggle" type="button" title="Show or hide the side column"></button>
+      </nav>
+    </section>
+    <div class="split" id="split" hidden>
+      <section class="panel chat" id="chat" aria-labelledby="chat-title">
+        <div class="head"><span class="title" id="chat-title">Transcript</span><span class="scope"><span id="chat-scope"></span><button class="btn" id="t-catchup" type="button" title="Catch up: jump to the last message from a person (a typed prompt, or you via the console) (C)">catch up</button><button class="btn" id="t-end" type="button" title="Jump to the newest entry (End)">jump to end</button><button class="btn all" type="button" data-all="transcript" title="Expand or collapse every tool call and long message">expand all</button></span></div>
+        <ol class="transcript" id="transcript"></ol>
+        <button class="btn newpill" id="t-new" type="button" hidden title="New entries arrived below; jump to them">new below</button>
+      </section>
+      <div class="handle" id="handle" role="separator" aria-orientation="vertical" aria-label="Resize side column" title="Drag to resize"></div>
+      <div class="side" id="side">
+        <section class="panel" id="files-panel" aria-labelledby="files-title">
+          <div class="head"><span class="title" id="files-title">Recent activity</span></div>
+          <ol class="files" id="files"></ol>
+          <button class="btn more" type="button" data-tab="activity" hidden title="Open the activity tab"></button>
+        </section>
+      </div>
+    </div>
+
+    <section class="panel" id="msgs-panel" aria-labelledby="msgs-title">
+      <div class="head"><span class="title" id="msgs-title">Messages</span><span class="scope"><span id="msg-scope"></span><button class="btn tog" id="boards" type="button" title="Show board posts (project posts that only notify with a one-line note)">board posts</button><button class="btn all" type="button" data-all="feed" title="Expand or collapse every message">expand all</button></span>
+        <span class="legend"><i class="recv">bar</i> received · <i class="sent">outline</i> sent · tint runs sender → recipient color</span></div>
+      <form id="compose">
+        <div class="row">
+          <label class="title" for="to">To</label>
+          <span class="to-wrap"><input id="to" autocomplete="off" placeholder="agent, /project, or *" role="combobox" aria-autocomplete="list" aria-controls="to-sug" aria-expanded="false">
+          <ul id="to-sug" role="listbox" hidden></ul></span>
+          <p class="reach" id="reach"></p>
+          <p class="status" id="status" role="status"></p>
+          <span class="mode" id="mode" role="radiogroup" aria-label="Delivery" hidden>
+            <label title="Delivered into each agent's context; idle agents on the bus host are woken"><input type="radio" name="mode" value="notify" id="mode-notify" checked>Notify</label>
+            <label title="Posted to the project board; agents see a one-line note and read it when they choose"><input type="radio" name="mode" value="board" id="mode-board">Board</label>
+          </span>
+          <span class="mode" id="pscope" role="radiogroup" aria-label="Which messages to show" hidden>
+            <label title="Every message any agent in this project sent or received"><input type="radio" name="pscope" value="all" id="pscope-all">Any member</label>
+            <label title="Only messages to this project, between its members, or involving you"><input type="radio" name="pscope" value="inner" id="pscope-inner">Within project</label>
+          </span>
+        </div>
+        <div class="msgrow">
+          <textarea id="text" placeholder="Message (Ctrl+Enter to send)" aria-label="Message"></textarea>
+          <button class="send" type="submit" title="Send (Ctrl+Enter)">Send</button>
+        </div>
+      </form>
+      <ol class="feed" id="feed"></ol>
+      <button class="btn older" id="feed-older" type="button" hidden title="Load the 200 messages before the oldest shown">load older</button>
+      <button class="btn more" type="button" data-tab="messages" hidden title="Open the messages tab"></button>
+    </section>
+  </main>
+</div>
+
+<script src="analytics-shared.js"></script>
+<script>
+// One page, three views (URL hash): #  |  #project/<path>  |  #agent/<name>
+// Polls the server every 3s. The feed and transcript only append; other sections re-render when their data changes.
+const POLL_MS = 3000;
+const STATES = ["busy", "idle", "offline"];
+const hm = s => { const m = Math.round(s / 60); return m < 1 ? "now" : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; };
+const tok = n => !n ? "–" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : Math.round(n / 1e3) + "k";
+const clock = ts => new Date(ts * 1000).toTimeString().slice(0, 5);
+const now = () => Date.now() / 1000;
+const state = a => STATES.includes(a.state) ? a.state : "offline";
+// agent links carry the current project context (?p=/path) when the agent belongs to it, for the carousel
+const ctxOf = () => view.kind === "project" ? view.path : view.kind === "agent" ? view.ctx : "";
+const inProj = (n, p) => agents.some(a => a.name === n && Object.keys(a.projects).some(q => under(q, p)));
+const agentHref = (n, tab = "") => { const p = ctxOf();
+  return "#agent/" + encodeURIComponent(n) + (tab ? "/" + tab : "") + (p && (inProj(n, p) || (view.kind === "agent" && n === view.name)) ? "?p=" + encodeURIComponent(p) : ""); };
+const projHref = p => "#project/" + encodeURIComponent(p);
+// a server override ("color") wins through #color-css, so changing it recolors rows that are already rendered.
+const colorOf = n => (n.startsWith("/") ? projects.find(p => p.path === n) : agents.find(a => a.name === n))?.color || defColor(n);
+const cAttr = n => `data-c="${esc(n)}" style="--c:${defColor(n)}"`;
+const band = (from, to) => `data-cf="${esc(from)}" data-ct="${esc(to)}" style="--cf:${defColor(from)};--ct:${defColor(to)}"`;
+function applyColors() {
+  buildDefaults([...projects.map(p => p.path), ...agents.map(a => a.name)]);  // already-rendered elements carry the old inline default, so every known name gets a rule here
+  const css = [...agents.map(a => [a.name, a.color || defColor(a.name)]), ...projects.map(p => [p.path, p.color || defColor(p.path)])]
+    .filter(([, c]) => /^#[0-9a-f]{6}$/i.test(c || ""))  // only plain hex reaches the stylesheet
+    .map(([n, c]) => { const q = n.replace(/["\\]/g, "\\$&"); return `[data-c="${q}"]{--c:${c}!important}[data-cf="${q}"]{--cf:${c}!important}[data-ct="${q}"]{--ct:${c}!important}`; }).join("\n");
+  if ($("color-css").textContent !== css) $("color-css").textContent = css;
+}
+const swatch = n => `<button class="sw" type="button" ${cAttr(n)} data-pick="${esc(n)}" aria-label="Color of ${esc(n)}" title="Change color"></button>`;
+const projLink = (p, sub = true) => `<a class="proj${sub ? "" : " unsub"}" ${cAttr(p)} href="${projHref(p)}" title="${esc(p)}${sub ? "" : ": listed, not subscribed"}">${esc(p)}</a>`;
+const agentLink = (n, cls = "") => `<a class="name ${cls}" ${cAttr(n)} href="${agentHref(n)}">${esc(n)}</a>`;
+const kindOf = n => n === "*" ? "broadcast" : n === "human" ? "human" : n.startsWith("/") ? "project" : "agent";
+
+// --- markdown: runs on ALREADY-ESCAPED text, so no raw HTML can get through ---
+// bare http(s) URLs in already-escaped text; trailing punctuation (.,;:!?) and an unmatched ")" stay outside the link
+// URL char = not space/quote/angle/paren and not the start of an escaped &gt; &lt; &quot; &#39;; parens only balanced (wiki links);
+// the match can't end on . , ; : ! ? * _ (sentence punctuation, **bold** / _italic_ markers)
+// no URL may contain \u0000: that marks a stashed link/code, whose HTML would be spliced into the href
+const BARE_URL = /https?:\/\/(?:(?!&(?:gt|lt|quot|#39);)[^\s<>"'`()\u0000]|\((?:(?!&(?:gt|lt|quot|#39);)[^\s<>"'`()\u0000])*\))+(?<![.,;:!?*_])/g;
+const urlLink = u => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`;
+// GFM table: header row, separator row (|---|:--:|), body rows -> <table>; cells get inline formatting; \| is a literal pipe
+function mdTable(rows, inline) {
+  const cells = r => r.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map(c => c.trim());
+  const align = cells(rows[1]).map(c => c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "");
+  const td = (tag, cs) => cs.map((c, i) => `<${tag}${align[i] ? ` style="text-align:${align[i]}"` : ""}>${inline(c)}</${tag}>`).join("");
+  return `<div class="mdt-wrap"><table class="mdt"><thead><tr>${td("th", cells(rows[0]))}</tr></thead><tbody>`
+    + rows.slice(2).map(r => `<tr>${td("td", cells(r))}</tr>`).join("") + "</tbody></table></div>";
+}
+// list item: indent, bullet or number (n = its start), text; "- [ ]" / "- [x]" become checkboxes
+const LI = /^(\s*)(?:([-*+])|(\d+)[.)])\s+(.*)/;
+function mdList(rows, inline) {
+  let i = 0;
+  const item = t => { const m = t.match(/^\[([ xX])\]\s+(.*)/);
+    return m ? `<li class="task"><input type="checkbox" disabled${m[1] === " " ? "" : " checked"}> ${inline(m[2])}</li>` : `<li>${inline(t)}</li>`; };
+  const build = lvl => {  // items at this indent; deeper ones nest inside the previous item
+    const tag = rows[i].ord ? "ol" : "ul", n = rows[i].n;
+    let h = `<${tag}${rows[i].ord && n !== 1 ? ` start="${n}"` : ""}>`;
+    while (i < rows.length && rows[i].ind >= lvl) {
+      if (rows[i].ind > lvl) { h = h.replace(/<\/li>$/, "") + build(rows[i].ind) + "</li>"; continue; }
+      h += item(rows[i++].text);
+    }
+    return h + `</${tag}>`;
+  };
+  let html = "";
+  while (i < rows.length) html += build(rows[i].ind);
+  return html;
+}
+function md(s) {
+  s = s.replace(/\u0000/g, "");  // NUL marks our placeholders; a forged one could splice stashed HTML into an href
+  const stash = [];  // code, links and escapes are pulled out first so nothing inside them is formatted
+  const keep = h => `\u0000${stash.push(h) - 1}\u0000`;
+  // fenced code; the language (```py) becomes a class the optional highlighter reads
+  s = s.replace(/^```([\w+#.-]*)[^\n]*\n([\s\S]*?)(?:^```[^\n]*$|(?![\s\S]))/gm,
+    (_, lang, c) => "\n" + keep(`<pre><code${lang ? ` class="language-${lang.toLowerCase()}"` : ""}>${c.replace(/\n$/, "")}</code></pre>`) + "\n");
+  const inline = (t, label = false) => t
+    .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`))
+    .replace(/\\([\\`*_{}[\]()#+\-.!|~])/g, (_, c) => keep(c))  // \* \_ \| ... are literal
+    .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)\u0000]+)\)/g, (_, alt, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">image: ${alt || u}</a>`))
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\u0000]+)\)/g, (_, t, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${inline(t, true)}</a>`))  // label gets bold/italic too
+    .replace(BARE_URL, u => label ? u : keep(urlLink(u)))  // no link inside a link's label
+    .replace(/\*\*\*(\S(?:[^\n]*?\S)?)\*\*\*/g, "<b><i>$1</i></b>")
+    .replace(/\*\*(\S(?:[^\n]*?\S)?)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^\w])__(\S(?:[^\n]*?\S)?)__(?!\w)/g, "$1<b>$2</b>")
+    .replace(/(^|[^\w*])\*(\S(?:[^*\n]*?\S)?)\*(?!\w)/g, "$1<i>$2</i>")
+    .replace(/(^|[^\w])_(\S(?:[^_\n]*?\S)?)_(?!\w)/g, "$1<i>$2</i>")
+    .replace(/~~([^~\s](?:[^~\n]*[^~\s])?)~~/g, "<s>$1</s>");
+  const blocks = lines => {
+    const out = [];
+    let para = [];
+    const flush = () => { if (para.length) out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; };
+    const isRow = l => /^\s*\|.*\|\s*$/.test(l), isSep = l => /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*\|?\s*$/.test(l);
+    const isQuote = l => /^\s*&gt; ?/.test(l);  // input is already escaped: ">" arrives as &gt;
+    for (let k = 0; k < lines.length; k++) {
+      const line = lines[k];
+      let m;
+      if (isRow(line) && k + 1 < lines.length && isSep(lines[k + 1])) {  // a table starts here
+        flush();
+        const rows = [line, lines[++k]];
+        while (k + 1 < lines.length && isRow(lines[k + 1])) rows.push(lines[++k]);
+        out.push(mdTable(rows, inline));
+      }
+      else if (isQuote(line)) {  // blockquote: strip the markers, render the inside as markdown
+        flush();
+        const q = [line];
+        while (k + 1 < lines.length && isQuote(lines[k + 1])) q.push(lines[++k]);
+        out.push(`<blockquote>${blocks(q.map(l => l.replace(/^\s*&gt; ?/, "")))}</blockquote>`);
+      }
+      else if (!line.trim()) flush();
+      else if (/^\u0000\d+\u0000$/.test(line)) { flush(); out.push(line); }
+      else if ((m = line.match(/^(#{1,6})\s+(.*)/))) { flush(); out.push(`<div class="h h${m[1].length}">${inline(m[2])}</div>`); }
+      else if (LI.test(line)) {  // a list: its items plus indented continuation lines
+        flush();
+        const rows = [];
+        for (; k < lines.length; k++) {
+          const l = lines[k], li = l.match(LI);
+          if (li) rows.push({ ind: li[1].replace(/\t/g, "    ").length, ord: !li[2], n: li[3] ? Number(li[3]) : 1, text: li[4] });
+          else if (l.trim() && /^\s/.test(l)) rows[rows.length - 1].text += " " + l.trim();
+          else { k--; break; }
+        }
+        out.push(mdList(rows, inline));
+      }
+      else para.push(line);
+    }
+    flush();
+    return out.join("");
+  };
+  let html = blocks(s.split("\n"));
+  while (/\u0000\d+\u0000/.test(html)) html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[i]);  // stashes can nest (code in a link label)
+  return html;
+}
+// optional syntax highlighting: the bus's copy of highlight.js (install-service.py downloads it) loads on the first
+// fenced block with a language; without it (404), plain monospace
+let hlState = null;  // null = not tried, "loading", "ok", "failed"
+function highlight() {
+  const todo = document.querySelectorAll('.md pre code[class*="language-"]:not([data-hl])');
+  if (!todo.length) return;
+  if (hlState === "ok") { for (const c of todo) { c.dataset.hl = "1"; window.hljs.highlightElement(c); } return; }
+  if (hlState) return;
+  hlState = "loading";
+  const sc = document.createElement("script");
+  sc.src = "/vendor/highlight.min.js";
+  sc.onload = () => { hlState = "ok"; window.hljs.configure({ ignoreUnescapedHTML: true }); highlight(); };
+  sc.onerror = () => { hlState = "failed"; console.warn("highlight.js didn't load; code blocks stay plain"); };
+  document.head.append(sc);
+}
+let hlQueued = false;
+new MutationObserver(() => { if (!hlQueued) { hlQueued = true; requestAnimationFrame(() => { hlQueued = false; highlight(); }); } })
+  .observe(document.body, { childList: true, subtree: true });
+// known agent names in rendered text become links; skips tags, <pre>/<code>/<a> contents.
+// Names are [A-Za-z0-9._-]; boundaries treat those chars as part of a name (so swarm-c1 doesn't match in swarm-c10),
+// but a trailing "." before a non-name char is allowed ("ask swarm-c1."). "&" before blocks entity names like &quot;.
+function linkNames(html) {
+  const names = agents.map(a => a.name).filter(n => /^[A-Za-z0-9._-]+$/.test(n)).sort((a, b) => b.length - a.length);
+  if (!names.length) return html;
+  const re = new RegExp(`(?<![A-Za-z0-9_.&-])(${names.map(n => n.replace(/\./g, "\\.")).join("|")})(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_-])`, "g");
+  // split keeps skipped chunks (odd indices): whole pre/code/a elements, or any single tag
+  return html.split(/(<(pre|code|a)\b[\s\S]*?<\/\2>|<[^>]*>)/).map((p, i) => i % 3 ? (i % 3 === 1 ? p : "")
+    : p.replace(re, n => `<a class="name mention" ${cAttr(n)} href="${agentHref(n)}">${n}</a>`)).join("");
+}
+// message/transcript text: raw kept in data-raw so the markdown toggle can re-render in place
+const plain = raw => esc(raw).replace(BARE_URL, urlLink);
+// markdown that breaks the renderer (e.g. thousands of nested quotes overflow the stack) shows as plain text
+const render = raw => {
+  let html;
+  try { html = mdOn ? md(esc(raw)) : plain(raw); } catch (e) { console.warn("markdown failed; showing plain text", e); html = plain(raw); }
+  return linkNames(html);
+};
+// collapse = may clamp to 3 lines (only outgoing agent-to-agent messages; see feedCollapses / pollTranscript for the rules)
+const txt = (raw, collapse = false) => `<div class="txt${collapse ? " clamp" : ""}${mdOn ? " md" : ""}" data-raw="${esc(raw)}">${render(raw)}</div>${collapse ? '<button class="x" type="button" hidden>expand</button>' : ""}`;
+// the expand toggle only shows on text that is actually clamped; re-checked on every fit() (polls, resizes, tabs)
+function clamps() {
+  for (const b of document.querySelectorAll(".x")) {
+    const t = b.previousElementSibling;
+    if (t.classList.contains("clamp") && t.clientHeight) b.hidden = t.scrollHeight <= t.clientHeight + 1;
+  }
+  for (const b of document.querySelectorAll("[data-all]")) {
+    const n = foldables($(b.dataset.all)).length;
+    b.hidden = !n;
+    b.textContent = n && anyFolded($(b.dataset.all)) ? "expand all" : "collapse all";
+  }
+}
+const setFold = (b, open) => { b.previousElementSibling.classList.toggle("clamp", !open); b.classList.toggle("open", open); b.textContent = open ? "collapse" : "expand"; };
+// what "expand all / collapse all" acts on: tool blocks and clampable messages (shown ones; overflow-free text has no toggle)
+const foldables = root => [...root.querySelectorAll("details"), ...[...root.querySelectorAll(".x")].filter(b => !b.hidden)];
+const anyFolded = root => foldables(root).some(f => f.tagName === "DETAILS" ? !f.open : !f.classList.contains("open"));
+for (const b of document.querySelectorAll("[data-all]")) b.addEventListener("click", () => {
+  const root = $(b.dataset.all), open = anyFolded(root);
+  for (const f of foldables(root)) f.tagName === "DETAILS" ? f.open = open : setFold(f, open);
+  fit();
+});
+document.addEventListener("click", e => {
+  const b = e.target.closest(".x");
+  if (!b) return;
+  // the overview side panel is sized to fit the page: expanding there opens the messages tab with it expanded
+  const li = b.closest("#side li[data-id]");
+  if (li && view.kind === "agent" && view.tab === "overview") {
+    const id = li.dataset.id;
+    location.hash = agentHref(view.name, "messages");
+    setTimeout(() => {
+      const row = document.querySelector(`#feed li[data-id="${id}"]`), t = row?.querySelector(".txt.clamp");
+      if (t) { setFold(t.nextElementSibling, true); row.scrollIntoView({ block: "start" }); }
+    }, 100);
+    return;
+  }
+  setFold(b, !b.classList.contains("open"));
+  fit();
+});
+function rerenderText() {
+  const tr = $("transcript"), y = scrollY, top = tr.scrollTop, stuck = tr.scrollHeight - tr.scrollTop - tr.clientHeight < 40;
+  for (const el of document.querySelectorAll(".txt")) {
+    el.classList.toggle("md", mdOn);
+    el.innerHTML = render(el.dataset.raw);
+  }
+  tr.scrollTop = stuck ? tr.scrollHeight : top;
+  scrollTo({ top: y });
+  fit();
+}
+
+window.addEventListener("arke-unlocked", () => poll(true));
+
+async function api(path, opts = {}) {
+  let r;
+  try { r = await netFetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Agent-As": "human", "X-Agent-Via": "console" } }); }
+  catch (e) { if (e.key) throw e; throw new Error(`${BUS_LABEL}: ${e.message}`); }  // a locked page isn't a network problem
+  if (!(r.headers.get("Content-Type") || "").startsWith("application/json"))
+    throw new Error(`${BUS_LABEL} isn't the arke server (it answered ${path} with ${r.headers.get("Content-Type") || "no content type"}). `
+      + `Open the console from the bus itself (http://your-bus-host:7777/), reload the page.`);
+  const body = await r.json();
+  if (!r.ok) throw Object.assign(new Error(body.error || r.statusText), { status: r.status });
+  return body;
+}
+
+// --- view state ---
+let view = { kind: "all" };
+let agents = [], projects = [];
+let lastId = 0;                 // newest message id shown in the feed
+let tNext = "", tPrev = null, tAvailable = null;  // transcript cursors from the server (opaque): poll with tNext, page back with tPrev
+let tGen = 0;                   // bumped when the transcript starts over; reads begun before are dropped
+const tIds = new Set(), tCalls = new Map();  // entry ids shown; tool call id -> its <details>, for results
+let tNew = 0;  // new entries below while scrolled up
+const seen = {};                // section -> JSON last rendered, to skip no-op re-renders
+let tScroll = 0, tStuck = true;  // transcript scroll, saved while it's hidden by a tab
+let sideOff = pref("side-off", "0") === "1", sideW = Number(pref("side-w", "0")) || 0;
+let mdOn = pref("md", "rendered") !== "plain";
+const reachOf = a => ["gone", "stale"].includes(a.reachable) ? a.reachable : "yes";
+
+const TABS = ["overview", "transcript", "activity", "messages", "columns", "stacked"];
+const dec = s => { try { return decodeURIComponent(s); } catch { return ""; } };
+
+// #agent/<encoded name>[/<tab>]  |  #project/<encoded path>  |  #
+function parseHash() {
+  const [h, qs = ""] = location.hash.slice(1).split("?"), i = h.indexOf("/");
+  const kind = i < 0 ? h : h.slice(0, i), arg = i < 0 ? "" : h.slice(i + 1);
+  if (kind === "agent" && arg) {
+    const [n, tab] = arg.split("/");  // the name is encoded, so a raw "/" only separates the tab
+    return { kind, name: dec(n), tab: TABS.includes(tab) ? tab : "overview", ctx: new URLSearchParams(qs).get("p") || "" };
+  }
+  if (kind === "project" && dec(arg)) return { kind, path: dec(arg) };
+  return { kind: "all" };
+}
+
+// agent view layout: moves panels/compose for the tab, keeps the transcript's scroll position across hides
+function applyTab() {
+  const tr = $("transcript"), split = $("split");
+  if (tr.clientHeight) { tScroll = tr.scrollTop; tStuck = tr.scrollHeight - tr.scrollTop - tr.clientHeight < 40; }
+  split.dataset.tab = view.tab;
+  split.classList.toggle("side-off", sideOff);
+  if (sideW) split.style.setProperty("--side-w", sideW + "px");
+  // compose sits under the transcript, except on the messages tab
+  if (view.tab === "messages") $("msgs-panel").querySelector(".head").after($("compose"));
+  else $("chat").append($("compose"));
+  for (const a of $("tabs").querySelectorAll("a")) {
+    a.href = agentHref(view.name, a.dataset.tab);
+    a.setAttribute("aria-selected", a.dataset.tab === view.tab);
+  }
+  const tg = $("side-toggle");
+  tg.hidden = view.tab !== "overview";
+  tg.textContent = sideOff ? "show side ◂" : "hide side ▸";
+  tg.setAttribute("aria-expanded", !sideOff);
+  renderStrip();
+  fit();
+  if (tr.clientHeight) tr.scrollTop = tStuck ? tr.scrollHeight : tScroll;
+}
+
+// #help opens the help overlay over whatever view was showing; closing goes back to that view's hash
+let routed = false, helpBack = "#", focusNext = false;  // focusNext: the pin carousel navigated here, put the cursor in the message box
+const viewTo = () => view.kind === "agent" ? view.name : view.kind === "project" ? view.path : "";  // this page's recipient
+function route(e) {
+  hideTip();
+  const help = location.hash === "#help";
+  $("help").hidden = !help;
+  if (help) {
+    if (e && e.oldURL) helpBack = new URL(e.oldURL).hash || "#";
+    loadHelp();
+    if (routed) return;
+  }
+  routed = true;
+  renaming = false;
+  const prev = view;
+  view = parseHash();
+  // on an agent page, its own name is chipped wherever it's linked in the messages and transcript
+  $("self-css").textContent = view.kind !== "agent" ? "" : `:is(#feed, #transcript) a.name[data-c="${CSS.escape(view.name)}"] { font-weight: 700; }`;
+  const isAgent = view.kind === "agent";
+  // switching tabs on the same agent only changes the layout
+  const ready = () => { if (isAgent && (view.ctx || focusNext)) $("text").focus({ preventScroll: true }); focusNext = false; };  // opened from a project or the pin carousel: ready to type
+  if (isAgent && prev.kind === "agent" && prev.name === view.name) { applyTab(); fillEarlier(); ready(); return; }  // fill: it may be shown now
+  $("agents-panel").hidden = isAgent;
+  $("agent-panel").hidden = $("split").hidden = !isAgent;
+  // compose lives under the transcript in an agent view, under the messages header otherwise
+  if (isAgent) { $("side").append($("msgs-panel")); applyTab(); }
+  else { $("msgs-panel").querySelector(".head").after($("compose")); $("main").append($("msgs-panel")); }
+  tStuck = true;
+  for (const k in seen) delete seen[k];
+  lastId = 0; feedOldest = 0; $("feed-older").hidden = true; tNext = ""; tAvailable = null; tGen++; tReset(false);
+  $("feed").innerHTML = "";
+  $("status").textContent = "";
+  // a typed draft keeps its recipient and delivery mode across navigation
+  const to = viewTo();
+  if (!$("text").value.trim()) { $("to").value = to; $("mode-notify").checked = true; }
+  else if ($("to").value !== to) toast(`Draft kept: it still goes to ${$("to").value || "no recipient"}, not ${to || "this page"}`);
+  $("pscope").hidden = view.kind !== "project";
+  $(pref("pscope", "all") === "inner" ? "pscope-inner" : "pscope-all").checked = true;
+  preview();
+  window.scrollTo({ top: 0 });
+  fit();
+  ready();
+  // a pinned agent prefetched in the background: draw it now, the poll below only fetches what's new since
+  const pre = isAgent && cache.get(view.name), a = pre && agents.find(x => x.name === view.name);
+  if (pre && a) {
+    renderStrip(); renderAgent(a);
+    pollTranscript(a, pre.tr);
+    appendFeed(pre.log);
+    fit();
+  }
+  poll(true);
+}
+
+// one scrollbar: on wide screens the overview/transcript/columns/stacked tabs size the transcript to the viewport,
+// so it (not the page) scrolls and compose stays visible. Side panels show the newest rows that fit plus "show more".
+const FIT_TABS = ["overview", "transcript", "columns"];  // stacked scrolls the page: its panels sit below the transcript
+function fit() {
+  queueMicrotask(showNewPill);  // after this resizes the transcript
+  clamps();
+  const tr = $("transcript"), top = tr.scrollTop, stuck = tr.scrollHeight - top - tr.clientHeight < 40;
+  const panels = [[$("files-panel"), $("files")], [$("msgs-panel"), $("feed")]];
+  for (const [p, list] of panels) { p.style.height = ""; for (const r of list.children) r.hidden = false; p.querySelector(".more").hidden = true; }
+  // the transcript's top doesn't depend on its own height, so it is measured without clearing it (keeps its scroll)
+  const pad = parseFloat(getComputedStyle(document.body).paddingBottom);
+  const h = Math.floor(innerHeight - (tr.getBoundingClientRect().top + scrollY) - $("compose").offsetHeight - 1 - pad);  // 1 = panel border
+  if (view.kind !== "agent" || !FIT_TABS.includes(view.tab) || innerWidth <= 1000 || h < 240) { tr.style.height = tr.style.maxHeight = ""; return; }
+  tr.style.height = tr.style.maxHeight = h + "px";
+  tr.scrollTop = stuck ? tr.scrollHeight : top;
+  if (view.tab === "transcript" || (view.tab === "overview" && sideOff)) return;
+  const room = $("chat").offsetHeight;
+  if (view.tab !== "overview") { for (const p of panels) clip(p, room, view.tab === "columns"); return; }
+  // overview: activity + messages share the transcript column's height, ~40/60, leftover to whichever needs it
+  const [a, m] = panels.map(([p]) => p.offsetHeight), avail = room - 16;  // 16 = .side gap
+  let fa = Math.round(avail * 0.4);
+  if (a + m <= avail || a < fa) fa = a; else if (m < avail - fa) fa = avail - m;
+  clip(panels[0], fa, true); clip(panels[1], avail - fa, true);
+}
+// hide the list's rows (oldest last) that don't fit in budget px; force = set the panel to exactly budget
+function clip([p, list], budget, force) {
+  const rows = [...list.children], more = p.querySelector(".more");
+  if (p.offsetHeight > budget) {
+    more.hidden = false;
+    const room = budget - (p.offsetHeight - list.offsetHeight), y0 = list.getBoundingClientRect().top;
+    const padB = parseFloat(getComputedStyle(list).paddingBottom);
+    let n = rows.findIndex(r => r.getBoundingClientRect().bottom - y0 + padB > room - 2);  // 2px slack for rounding
+    if (n < 0) { n = rows.length; more.hidden = true; }
+    n = Math.max(n, 1);  // always keep the first (newest) row, even if it alone is taller than the panel
+    rows.slice(n).forEach(r => r.hidden = true);
+    more.textContent = `show more (${rows.length - n})`;
+  }
+  if (force) p.style.height = budget + "px";
+}
+for (const b of document.querySelectorAll(".more")) b.addEventListener("click", () => location.hash = agentHref(view.name, b.dataset.tab));
+addEventListener("resize", fit);
+const fitObs = new ResizeObserver(() => fit());
+addEventListener("resize", showNewPill);  // the pill sits on the transcript's bottom edge
+fitObs.observe($("agent-head")); fitObs.observe($("compose"));
+
+// the message log for what's on screen: one agent, one project (with the scope toggle), or everything
+const logQuery = () => view.kind === "agent" ? `agent=${encodeURIComponent(view.name)}`
+  : view.kind === "project" ? `project=${encodeURIComponent(view.path)}&scope=${pref("pscope", "all")}` : "";
+// --- polling ---
+let timer = null, pollGen = 0;
+const humanHistory = new Map();
+let humanLastId = 0;
+async function pollMessages(query, since, stale, history = false) {
+  // /log returns the newest page above `since`. After a hidden tab or a lost connection, work back
+  // to the previous cursor before advancing it, or the middle of a busy interval would disappear.
+  const pages = [];
+  let before = 0;
+  for (;;) {
+    const page = await api(`/log?${query}&since=${since}&limit=${LOG_PAGE}` + (before ? `&before=${before}` : ""));
+    if (stale()) return [];
+    if (!page.length) break;
+    if (before && page[0].id >= before) throw new Error("message history did not advance while loading a missing page");
+    pages.push(page);
+    if ((!since && !history) || page.length < LOG_PAGE) break;  // the feed starts with one page; human questions need all history
+    before = page[0].id;
+  }
+  return pages.reverse().flat();
+}
+async function poll(force = false) {
+  clearTimeout(timer);
+  if (document.hidden && !force) { timer = setTimeout(poll, POLL_MS); return; }
+  // a newer poll (e.g. the carousel switched agents) supersedes this one: drop its results, don't reschedule
+  const gen = ++pollGen, stale = () => gen !== pollGen;
+  try {
+    let [ag, pr, msgs, mine] = await Promise.all([
+      api("/agents"), api("/projects"), pollMessages(logQuery(), lastId, stale), pollMessages("agent=human", humanLastId, stale, true)]);
+    if (stale()) return;
+    agents = ag; projects = pr;
+    buildAlias();
+    msgs = msgs.map(canonMsg);
+    if (view.kind === "agent" && alias.has(view.name)) { location.replace(agentHref(alias.get(view.name), view.tab)); return; }  // an old name in the URL
+    applyColors();
+    $("conn").textContent = "";
+    renderTree();
+    if (view.kind === "agent") {
+      const a = agents.find(x => x.name === view.name);
+      if (!a) {
+        $("agent-head").innerHTML = `<p class="empty">No agent named ${esc(view.name)} (it may have been forgotten after going offline). <a href="#">All agents</a></p>`;
+        $("files").innerHTML = ""; delete seen.files;  // not the previous agent's activity
+      }
+      else { renderStrip(); renderAgent(a); await pollTranscript(a); if (stale()) return; }
+    } else renderAgents();
+    appendFeed(msgs);
+    for (const m of mine) { humanHistory.set(m.id, m); humanLastId = Math.max(humanLastId, m.id); }
+    renderWaiting([...humanHistory.values()].sort((a, b) => a.id - b.id).map(canonMsg));
+    fit();
+    prefetchPins();
+  } catch (e) {
+    if (stale()) return;
+    $("conn").textContent = e.key ? "Waiting for the Arke key." : `Can't reach the bus: ${e.message} Retrying every few seconds.`;
+  }
+  timer = setTimeout(poll, POLL_MS);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(true); });
+
+function changed(key, data) {
+  const s = JSON.stringify(data);
+  if (seen[key] === s) return false;
+  seen[key] = s; return true;
+}
+
+// --- rendering ---
+function renderTree() {
+  const cur = view.kind === "project" ? view.path : view.kind === "all" ? "" : null;
+  // counts = agents in the project's subtree, from /agents; offline / hand-hidden ones only count while shown
+  const showHid = pref("showhidden", "no") === "yes";
+  const live = (pref("offline", "hide") === "hide" ? agents.filter(a => state(a) !== "offline") : agents)
+    .filter(a => showHid || !hiddenAgents.has(a.name));
+  const rows = [{ p: "", label: "all projects", depth: 0, parent: false, n: live.length }].concat(projects.map(p => ({
+    p: p.path, label: p.path.split("/").pop(), depth: p.path.split("/").length - 2,
+    parent: projects.some(q => q.path.startsWith(p.path + "/")), n: live.filter(a => inProj(a.name, p.path)).length })));
+  if (!changed("tree", [rows, cur])) return;
+  $("tree").innerHTML = rows.map(r => `<li><a href="${r.p ? projHref(r.p) : "#"}" style="--depth:${r.depth}" class="${r.parent ? "parent" : ""}"
+    ${r.p === cur ? 'aria-current="page"' : ""} title="${r.p ? esc(r.p) + ", including subprojects" : "Everything"}"><span ${r.p ? cAttr(r.p) : ""}>${esc(r.label)}</span><span class="count">${r.n}</span></a>${r.p ? swatch(r.p) : ""}</li>`).join("");
+}
+
+// small labels shared by the table and the agent header
+const KINDS = { claude: "Claude Code", codex: "Codex" };
+const kindBadge = a => `<span class="kind ${esc(a.kind)}">${esc(KINDS[a.kind] || a.kind || "?")}</span>`;
+const modelLabel = a => [a.model || a.kind, a.effort].filter(Boolean).join(" · ");
+const tmuxLabel = a => [a.tmux_session && "tmux " + a.tmux_session, a.tmux && a.tmux.split(":").pop()].filter(Boolean).join(" · ");
+// context: % of the window with a bar (amber >= 70%, red >= 85%) when the window is known, else raw tokens
+function ctxCell(a) {
+  if (!a.window) return tok(a.context);
+  const pct = Math.round((a.context || 0) / a.window * 100);
+  return `<span class="ctx ${pct >= 85 ? "hot" : pct >= 70 ? "warm" : ""}" data-tip="${tok(a.context)} of ${tok(a.window)} tokens${a.window_est ? " (window estimated)" : ""}">${pct}%<span class="bar"><i style="width:${Math.min(pct, 100)}%"></i></span></span>`;
+}
+
+// renames: an agent's old names (a.aka) map to its current name, so old messages link, color and count as that agent.
+// An old name several agents had (and none has now) stays as written.
+let alias = new Map();
+function buildAlias() {
+  const cur = new Set(agents.map(a => a.name)), seenAka = new Map();
+  for (const a of agents) for (const o of new Set(a.aka || [])) seenAka.set(o, seenAka.has(o) ? null : a.name);
+  alias = new Map([...seenAka].filter(([o, n]) => n && !cur.has(o)));
+  const fixed = pins.map(n => alias.get(n) || n);  // pins follow renames
+  if (fixed.some((n, i) => n !== pins[i])) setPins(fixed);
+}
+const canon = n => alias.get(n) || n;
+// rewrite a /log message to current names (the name it was sent as stays in fromAs, shown on hover)
+function canonMsg(m) {
+  const from = canon(m.from);
+  return { ...m, from, fromAs: from !== m.from ? m.from : undefined, reach: (m.reach || []).map(canon),
+           to: m.to.map(t => t.kind === "agent" ? { ...t, name: canon(t.name) } : t) };
+}
+const canonEntry = e => e.kind !== "bus" ? e : { ...e, from: canon(e.from), to: (e.to || []).map(canon) };
+
+// pinned agents' first transcript page and message log, fetched in the background so the carousel draws instantly
+const cache = new Map();  // name -> {tr, log, at}
+let prefetching = false;
+async function prefetchPins() {
+  if (prefetching || document.hidden) return;
+  prefetching = true;
+  try {
+    for (const n of pins) {
+      if (view.kind === "agent" && view.name === n) continue;
+      if (!agents.some(a => a.name === n) || now() - (cache.get(n)?.at || 0) < CACHE_S) continue;
+      const q = encodeURIComponent(n);
+      const [tr, log] = await Promise.all([api(`/agents/${q}/transcript?limit=${T_FIRST}`), api(`/log?agent=${q}&since=0`)]);
+      cache.set(n, { tr, log: log.map(canonMsg), at: now() });
+    }
+    for (const n of cache.keys()) if (!pins.includes(n)) cache.delete(n);
+  } catch (e) { console.warn("prefetching pinned agents failed; the carousel loads them on switch instead", e); }
+  finally { prefetching = false; }
+}
+const CACHE_S = 15;  // a cached agent older than this is refetched (the poll after a switch fills in anything newer anyway)
+
+// --- pinned agents: an ordered list of names in localStorage "ab.pins" (this browser only) ---
+let pins = (() => { try { const p = JSON.parse(pref("pins", "[]")); return Array.isArray(p) ? p.filter(n => typeof n === "string") : []; } catch (e) { console.warn("bad saved pins, starting empty", e); return []; } })();
+function setPins(list) { pins = [...new Set(list)]; setPref("pins", JSON.stringify(pins)); delete seen.agents; delete seen.agent; delete seen.strip; }
+const isPinned = n => pins.includes(n);
+// agents hidden from the table by hand (this browser): localStorage "ab.hidden"; "show hidden" brings them back
+let hiddenAgents = (() => { try { const h = JSON.parse(pref("hidden", "[]")); return new Set(Array.isArray(h) ? h : []); } catch (e) { console.warn("bad saved hidden list", e); return new Set(); } })();
+const saveHidden = () => setPref("hidden", JSON.stringify([...hiddenAgents]));
+const hideBtn = n => `<button class="hide-a" type="button" data-hidea="${esc(n)}" title="${hiddenAgents.has(n) ? "Unhide" : "Hide from the table (show hidden brings it back)"}">${hiddenAgents.has(n) ? "unhide" : "hide"}</button>`;
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-hidea]");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const n = b.dataset.hidea;
+  if (hiddenAgents.has(n)) hiddenAgents.delete(n); else hiddenAgents.add(n);
+  saveHidden(); renderAgents(); renderTree();
+});
+const pinStar = n => `<button class="pin${isPinned(n) ? " on" : ""}" type="button" data-pin="${esc(n)}" aria-pressed="${isPinned(n)}" title="${isPinned(n) ? "Unpin" : "Pin (PgUp/PgDn cycle through pinned agents)"}">${isPinned(n) ? "★" : "☆"}</button>`;
+document.addEventListener("click", e => {
+  const b = e.target.closest("button.pin[data-pin]");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const n = b.dataset.pin;
+  setPins(isPinned(n) ? pins.filter(x => x !== n) : [...pins, n]);
+  rerenderAll();
+});
+function rerenderAll() {
+  if (view.kind === "agent") { const a = agents.find(x => x.name === view.name); renderStrip(); if (a) renderAgent(a); }
+  else renderAgents();
+}
+
+// relative time cell ("5m ago"), absolute time in the tooltip; "—" when the field is missing or null
+const rel = (ts, t) => hm(t - ts);  // "35m", "now"
+const ago = (ts, t) => !ts ? '<span class="sub">—</span>'
+  : `<span data-tip="${esc(new Date(ts * 1000).toLocaleString())}" tabindex="0">${rel(ts, t)}</span>`;
+const base = p => (p || "").replace(/\/+$/, "").split("/").pop();
+const tilde = p => (p || "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");  // /home/me/x -> ~/x (shorter; full path on hover)
+// time column (group "time"): f = the agent field, tag = the letter the collapsed "Times" column shows for it
+const timeCol = (id, h, tag, tip, w) => ({ id, h, tag, f: id, g: "time", tip, cls: "num wide", w, key: a => a[id] || null, cell: (a, t) => ago(a[id], t) });
+// agents table columns: id (widths/visibility/sort are keyed by it), header, class, default width (px; 0 = takes the rest),
+// sort key (null sorts last), cell; fixed = can't be hidden
+const COLUMNS = [
+  { id: "agent", h: "Agent", fixed: true, asc: true, w: 180, key: a => a.name, cell: a => { const model = `${KINDS[a.kind] || a.kind || "?"}: ${modelLabel(a)}`;
+    return `<div class="clip">${pinStar(a.name)}${agentLink(a.name, "name")}${hideBtn(a.name)}</div>
+      <div class="sub clip" data-tip="${esc(model)}">${kindBadge(a)} ${esc(modelLabel(a))}</div>`; } },
+  { id: "state", h: "State", asc: true, cls: "state", w: 96, key: a => STATES.indexOf(state(a)), cell: a => statePill(a)
+    + (a.unread ? `<div><span class="unread" data-tip="messages delivered to ${esc(a.name)} it hasn't read yet">${a.unread} unread</span>${["held", "failed"].includes(a.wake?.status) ? ` <span class="unread wkbad" data-tip="${esc(a.wake.detail)}">wake ${esc(a.wake.status)}</span>` : ""}</div>` : "") },
+  { id: "about", h: "Working on", asc: true, cls: "about", w: 0, key: a => a.about || null, cell: a => esc(a.about) || '<span class="sub">–</span>' },
+  { id: "context", h: "Context", cls: "num ctxc", w: 90, key: a => a.window ? (a.context || 0) / a.window : a.context ?? null, cell: a => ctxCell(a) },
+  { id: "tokens", h: "Tokens out", cls: "num wide", w: 72, key: a => a.tokens ?? null, cell: a => tok(a.tokens) },
+  { id: "session", h: "Session", cls: "num wide", w: 64, key: a => -a.started_at, cell: (a, t) => hm(t - a.started_at) },
+  timeCol("last_active", "Last active", "A", "last hook activity", 84),
+  timeCol("last_sent", "Sent", "S", "last message it sent", 72),
+  timeCol("last_recv", "Received", "R", "last message delivered to it from another agent", 72),
+  timeCol("last_human", "Console", "C", "last message from you (the web console)", 72),
+  timeCol("last_prompt", "User", "U", "last prompt typed in its terminal", 72),
+  { id: "dir", h: "Dir", asc: true, cls: "wide", w: 110, key: a => a.cwd || null,
+    cell: a => `<div class="clip lclip" data-tip="${esc(a.cwd)}"><bdi>${esc(tilde(a.cwd)) || "–"}</bdi></div>` },
+  { id: "where", h: "Where (host · branch)", asc: true, cls: "wide", w: 140, key: a => [a.host, a.branch].filter(Boolean).join(" · ") || null,
+    cell: a => `<div class="clip" data-tip="${esc([a.host, a.branch, tmuxLabel(a)].filter(Boolean).join(" · "))}">${esc([a.host, a.branch].filter(Boolean).join(" · ")) || "–"}</div>` },
+  { id: "projects", h: "Projects", asc: true, cls: "wide projs", w: 100, key: a => Object.keys(a.projects).sort().join(" ") || null, cell: a => Object.entries(a.projects).map(([p, sub]) => projLink(p, sub)).join("") },
+];
+// the timing group collapsed into one column: the most recent of the five, tagged with its letter; breakdown in the tooltip
+const TIME_COLS = COLUMNS.filter(c => c.g === "time");
+const timeMax = a => TIME_COLS.reduce((m, c) => (a[c.f] || 0) > (m ? a[m.f] : 0) ? c : m, null);
+const TIMES = { id: "times", h: "Times", tip: "most recent of " + TIME_COLS.map(c => `${c.tag} = ${c.h}`).join(", "), cls: "num wide", w: 80,
+  key: a => { const m = timeMax(a); return m ? a[m.f] : null; },
+  cell: (a, t) => { const m = timeMax(a); if (!m) return '<span class="sub">—</span>';
+    const tip = TIME_COLS.map(c => `${c.tag}  ${c.h}: ${a[c.f] ? rel(a[c.f], t) + " (" + new Date(a[c.f] * 1000).toLocaleString() + ")" : "—"}`).join("\n");
+    return `<span data-tip="${esc(tip)}" tabindex="0"><span class="ttag">${m.tag}</span> ${rel(a[m.f], t)}</span>`; } };  // tag first so the times line up on the right
+const ALL_COLS = [...COLUMNS, TIMES];
+const colById = id => ALL_COLS.find(c => c.id === id);
+
+// visibility: {hidden: [ids], timeOpen: bool} in localStorage "ab.colvis"; default = timing group collapsed
+const VIS0 = { hidden: [], timeOpen: false };
+let colVis = (() => { try { const o = JSON.parse(pref("colvis", "null")); return o && Array.isArray(o.hidden) ? { hidden: o.hidden, timeOpen: !!o.timeOpen } : { ...VIS0, hidden: [] }; }
+  catch (e) { console.warn("bad saved column visibility, using the default", e); return { ...VIS0, hidden: [] }; } })();
+const saveVis = () => setPref("colvis", JSON.stringify(colVis));
+function shownCols() {
+  const out = [];
+  for (const c of COLUMNS) {
+    if (c.g === "time" && !colVis.timeOpen) { if (c === TIME_COLS[0] && !colVis.hidden.includes("times")) out.push(TIMES); continue; }
+    if (c.fixed || !colVis.hidden.includes(c.id)) out.push(c);
+  }
+  return out;
+}
+
+// asc = first click sorts ascending (text A-Z, state busy first); others start largest/newest first
+// sort: {c: column id, d: 1 | -1} in localStorage "ab.sort"; none = state, then most recently active. Pinned agents always come first.
+let sortBy = (() => { try { const o = JSON.parse(pref("sort", "null")); const c = o && colById(o.c); return c ? { c: c.id, d: o.d } : null; } catch (e) { console.warn("bad saved sort, using the default", e); return null; } })();
+const cmpKey = (x, y) => typeof x === "string" ? x.localeCompare(y) : x - y;
+const byDefault = (a, b) => STATES.indexOf(state(a)) - STATES.indexOf(state(b)) || (b.last_active || 0) - (a.last_active || 0) || a.name.localeCompare(b.name);
+function sortAgents(list) {
+  const col = sortBy && colById(sortBy.c);
+  if (!col) list.sort(byDefault);
+  else list.sort((a, b) => { const x = col.key(a), y = col.key(b);  // missing values last in either direction
+    return x == null || y == null ? (x == null) - (y == null) || byDefault(a, b) : cmpKey(x, y) * sortBy.d || byDefault(a, b); });
+  // stable: pinned on top (unless turned off), current order within each part
+  return pref("pintop", "top") === "top" ? list.sort((a, b) => isPinned(b.name) - isPinned(a.name)) : list;
+}
+function renderHead() {
+  $("agents-head").innerHTML = shownCols().map(c => { const on = sortBy?.c === c.id;
+    // timing group toggle: ▸ on the collapsed "Times" column, ▾ on the first time column when expanded
+    const grp = c === TIMES ? `<button class="grp" type="button" data-tgrp title="Expand the timing columns">▸</button>`
+      : c === TIME_COLS[0] ? `<button class="grp" type="button" data-tgrp title="Collapse the timing columns into one">▾</button>` : "";
+    const x = c.fixed ? "" : `<button class="hide-x" type="button" data-hide="${c.id}" title="Hide this column (right-click a header also hides it)" aria-label="Hide ${esc(c.h)}">✕</button>`;
+    return `<th class="${c.cls || ""}" data-col="${c.id}" ${on ? `aria-sort="${sortBy.d > 0 ? "ascending" : "descending"}"` : ""} title="${esc(c.tip ? c.tip + "; " : "")}click to sort">${grp}${esc(c.h)}${on ? `<span class="arrow">${sortBy.d > 0 ? "▲" : "▼"}</span>` : ""}${x}</th>`; }).join("");
+}
+
+function renderAgents() {
+  const q = view.kind === "project" ? view.path : "";
+  const all = sortAgents(agents.filter(a => !q || Object.keys(a.projects).some(p => under(p, q))));
+  // offline agents are hidden unless toggled on; unreachable/stale ones aren't offline, so they always show
+  const hide = pref("offline", "hide") === "hide", nOff = all.filter(a => state(a) === "offline").length;
+  const showHid = pref("showhidden", "no") === "yes", nHid = all.filter(a => hiddenAgents.has(a.name)).length;
+  const shown = (hide ? all.filter(a => state(a) !== "offline") : all).filter(a => showHid || !hiddenAgents.has(a.name));
+  const t = now(), cols = shownCols();
+  if (!changed("agents", [shown, q, hide, nOff, sortBy, colVis, pins, pref("pintop", "top"), [...hiddenAgents], showHid, Math.floor(t / 60)])) return;
+  // toggles keep their text (and size); pressed = shown / on, disabled when there's nothing to show
+  const tog = (id, on, n) => { const b = $(id); b.setAttribute("aria-pressed", on); b.disabled = n === 0 && !on; if (n != null) b.querySelector("b").textContent = n; };
+  tog("offline-toggle", !hide, nOff); tog("hidden-toggle", showHid, nHid); tog("pintop", pref("pintop", "top") === "top", null);
+  $("agent-scope").innerHTML = `${shown.length} agent${shown.length === 1 ? "" : "s"}` + (hide && nOff ? ` · ${nOff} offline` : "") + (!showHid && nHid ? ` · ${nHid} hidden` : "") + (q ? ` in ${projLink(q)} ${swatch(q)}<a href="#">clear</a>` : "");
+  $("agents-empty").hidden = all.length > 0;
+  $("agents").innerHTML = shown.map(a => `<tr class="${state(a)}${reachOf(a) === "gone" ? " gone" : ""}${isPinned(a.name) ? " pinned" : ""}">`
+    + cols.map(c => `<td${c.cls ? ` class="${c.cls}"` : ""}>${c.cell(a, t)}</td>`).join("") + "</tr>").join("");
+}
+
+// agents table columns: drag a header's right edge to resize; widths persist per column id in "ab.colw"
+// (only the ones changed from the default); "reset widths" restores defaults.
+let colW = (() => {
+  try { const w = JSON.parse(pref("colw", "null")); if (w && typeof w === "object" && !Array.isArray(w)) return w; }
+  catch (e) { console.warn("bad saved column widths, using the defaults", e); }
+  return {};
+})();
+const widthOf = c => c.w ? colW[c.id] || c.w : 0;
+const saveW = () => setPref("colw", JSON.stringify(colW));
+function applyCols() {
+  const cols = shownCols();
+  document.querySelectorAll("#agents-table th").forEach((th, i) => th.style.width = widthOf(cols[i]) ? widthOf(cols[i]) + "px" : "");
+  $("agents-table").style.minWidth = cols.reduce((x, c) => x + widthOf(c), 0) + 180 + "px";  // 180 = room for "Working on"
+  $("cols-reset").disabled = !Object.keys(colW).length;
+  $("cols-auto").hidden = innerWidth <= 760;  // the table is cards there
+}
+// headers are rebuilt on every sort/visibility change, so grips are re-attached each time
+function addGrips() {
+  const cols = shownCols();
+  document.querySelectorAll("#agents-table th").forEach((th, i) => {
+    const c = cols[i];
+    if (!c.w) return;
+    const g = document.createElement("span");
+    g.className = "grip"; g.title = "Drag to resize";
+    th.append(g);
+    g.addEventListener("click", e => e.stopPropagation());  // a resize isn't a sort
+    g.addEventListener("pointerdown", e => {
+      e.preventDefault(); g.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
+      const move = ev => { colW[c.id] = Math.max(50, Math.round(w0 + ev.clientX - x0)); applyCols(); };
+      g.addEventListener("pointermove", move);
+      g.addEventListener("pointerup", () => { g.removeEventListener("pointermove", move); saveW(); }, { once: true });
+    });
+  });
+}
+function buildHead() { renderHead(); addGrips(); applyCols(); renderColPop(); }
+const visChanged = () => { saveVis(); buildHead(); delete seen.agents; renderAgents(); };
+const hideCol = id => { if (!colVis.hidden.includes(id)) colVis.hidden.push(id); visChanged(); };
+// click a header: sort by it (numbers and times newest/largest first, text A-Z); again reverses. ▸/▾ toggles the timing group, ✕ hides.
+$("agents-head").addEventListener("click", e => {
+  if (e.target.closest("[data-tgrp]")) { colVis.timeOpen = !colVis.timeOpen; return visChanged(); }
+  const hx = e.target.closest("[data-hide]");
+  if (hx) return hideCol(hx.dataset.hide);
+  const th = e.target.closest("th[data-col]");
+  if (!th) return;
+  const c = colById(th.dataset.col);
+  sortBy = sortBy?.c === c.id ? { c: c.id, d: -sortBy.d } : { c: c.id, d: c.asc ? 1 : -1 };
+  setPref("sort", JSON.stringify(sortBy));
+  buildHead(); renderAgents();
+});
+$("agents-head").addEventListener("contextmenu", e => {
+  const th = e.target.closest("th[data-col]"), c = th && colById(th.dataset.col);
+  if (!c || c.fixed) return;
+  e.preventDefault(); hideCol(c.id);
+});
+// "columns" popover: a checklist of every column (the timing group as one row with its own expand box), plus reset
+function renderColPop() {
+  const row = (id, label, on, dis = false) => `<label><input type="checkbox" data-vis="${id}"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
+  $("colpop").innerHTML = COLUMNS.filter(c => c.g !== "time").map(c => row(c.id, c.h, c.fixed || !colVis.hidden.includes(c.id), c.fixed)).join("")
+    + `<div class="grp-rows"><label><input type="checkbox" data-topen${colVis.timeOpen ? " checked" : ""}> timing group expanded</label>`
+    + (colVis.timeOpen ? TIME_COLS.map(c => row(c.id, c.h, !colVis.hidden.includes(c.id))).join("") : row("times", "Times (collapsed)", !colVis.hidden.includes("times"))) + "</div>"
+    + `<button class="btn" type="button" id="colvis-reset" title="Show every column again, timing group collapsed">reset columns</button>`;
+}
+$("colpop").addEventListener("change", e => {
+  const t = e.target;
+  if (t.matches("[data-topen]")) colVis.timeOpen = t.checked;
+  else if (t.dataset.vis) colVis.hidden = t.checked ? colVis.hidden.filter(x => x !== t.dataset.vis) : [...colVis.hidden, t.dataset.vis];
+  visChanged();
+});
+$("colpop").addEventListener("click", e => { if (e.target.id === "colvis-reset") { colVis = { ...VIS0, hidden: [] }; visChanged(); } });
+// board posts: shown by default; hiding is a body class so nothing refetches
+const applyBoards = () => { const on = pref("boards", "show") === "show"; document.body.classList.toggle("noboard", !on); $("boards").setAttribute("aria-pressed", on); };
+$("boards").addEventListener("click", () => { setPref("boards", pref("boards", "show") === "show" ? "hide" : "show"); applyBoards(); });
+applyBoards();
+$("hidden-toggle").addEventListener("click", () => { setPref("showhidden", pref("showhidden", "no") === "yes" ? "no" : "yes"); renderAgents(); renderTree(); });
+$("pintop").addEventListener("click", () => { setPref("pintop", pref("pintop", "top") === "top" ? "sorted" : "top"); renderAgents(); });
+$("cols-pick").addEventListener("click", e => {
+  const p = $("colpop"); p.hidden = !p.hidden;
+  if (p.hidden) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  p.style.left = Math.max(4, Math.min(r.left, innerWidth - p.offsetWidth - 4)) + "px"; p.style.top = r.bottom + 4 + "px";
+});
+document.addEventListener("click", e => { if (!e.target.closest("#colpop, #cols-pick")) $("colpop").hidden = true; });
+$("offline-toggle").addEventListener("click", () => { setPref("offline", pref("offline", "hide") === "hide" ? "show" : "hide"); renderAgents(); renderTree(); });
+// auto-size: lay the table out by content once (no wrapping), read each header's width, keep "Working on" flexible
+$("cols-auto").addEventListener("click", () => {
+  const t = $("agents-table"), ths = [...t.querySelectorAll("th")], cols = shownCols();
+  ths.forEach(th => th.style.width = ""); t.classList.add("measuring");
+  ths.forEach((th, i) => { if (cols[i].w) colW[cols[i].id] = Math.min(420, Math.max(50, Math.ceil(th.getBoundingClientRect().width) + 2)); });
+  t.classList.remove("measuring"); saveW(); applyCols();
+});
+$("cols-reset").addEventListener("click", () => { colW = {}; saveW(); applyCols(); });
+buildHead();
+
+// state pill, or "unreachable" when the agent's pane is gone; "no activity" note when stale
+function statePill(a) {
+  const r = reachOf(a), why = esc(a.reachable_why || "");
+  if (r === "gone") return `<span class="pill gone" tabindex="0" data-tip="${why || "unreachable"}">unreachable</span>`;
+  return `<span class="pill ${state(a)}">${state(a)}</span>` + (r === "stale" ? `<span class="stale" tabindex="0" data-tip="${why || "no recent hook activity"}">no activity</span>` : "");
+}
+
+function renderAgent(a) {
+  const t = now(), s = state(a);
+  if (!renaming && changed("agent", [a, isPinned(a.name), Math.floor(t / 60)])) {
+    $("agent-head").innerHTML = `
+      <div class="arow"><h2>${pinStar(a.name)}<span id="aname">${esc(a.name)} <button class="btn" id="rename" type="button" title="Rename this agent; its old name keeps working">rename</button></span> <button class="sw" type="button" ${cAttr(a.name)} data-pick="${esc(a.name)}" aria-label="Change color" title="Change color"></button> ${statePill(a)}</h2>
+        <span class="atask" data-tip="${esc(a.about)}">${esc(a.about) || '<span class="sub">no task set</span>'}</span>
+        <span class="crumbs">${Object.entries(a.projects).map(([p, sub]) => `${projLink(p, sub)}${swatch(p)}`).join(" ") || '<span class="sub">no projects</span>'}</span></div>
+      <dl class="facts">
+        <div><dt>Context</dt><dd>${ctxCell(a)}</dd></div>
+        <div><dt>Tokens out</dt><dd>${tok(a.tokens)}</dd></div>
+        <div><dt>Last active</dt><dd>${a.last_active ? (hm(t - a.last_active) === "now" ? "now" : hm(t - a.last_active) + " ago") : "–"}</dd></div>
+        <div><dt>Session</dt><dd>${hm(t - a.started_at)}</dd></div>
+        <div><dt>Harness</dt><dd>${esc(KINDS[a.kind] || a.kind || "–")}</dd></div>
+        <div><dt>Model</dt><dd data-tip="${esc(modelLabel(a))}">${esc(modelLabel(a))}</dd></div>
+        <div><dt>Branch</dt><dd data-tip="${esc(a.branch)}">${esc(a.branch) || "–"}</dd></div>
+        <div><dt>Host</dt><dd data-tip="${esc(a.host)}">${esc(a.host) || "–"}</dd></div>
+        <div><dt>Tmux</dt><dd>${esc([a.tmux_session, a.tmux && a.tmux.split(":").pop()].filter(Boolean).join(" · ")) || "–"}</dd></div>
+        <div><dt>Directory</dt><dd class="lclip" data-tip="${esc(a.cwd)}"><bdi>${esc(a.cwd) || "–"}</bdi></dd></div>
+        <div><dt>Mail</dt><dd data-tip="${esc(a.unread ? "unread: " + (a.unread_ids || []).map(i => "#" + i).join(" ") : "nothing unread")}">${a.unread ? `${a.unread} unread` : "all read"}</dd></div>
+        ${a.wake?.status ? `<div><dt>Wake-up</dt><dd class="wk ${esc(a.wake.status)}" data-tip="${esc(`${a.wake.detail || ""} (${clock(a.wake.at)}${a.wake.tries ? `, tried ${a.wake.tries}×` : ""})`)}">${esc(a.wake.status)} · ${hm(t - a.wake.at) === "now" ? "now" : hm(t - a.wake.at) + " ago"}</dd></div>` : ""}
+      </dl>`;
+  }
+  if (changed("files", a.files)) {
+    const files = a.files || [];
+    $("files").innerHTML = files.length ? files.map(f => `<li><time>${clock(f.ts)}</time><span class="tool${KIND(f.tool) === "edit" ? " write" : ""}">${esc(f.tool)}</span>${actTarget(f)}</li>`).join("")
+      : `<li class="sub">Nothing since the bus last restarted.</li>`;
+  }
+}
+
+// activity row text: a shell call shows its description (command in the tooltip), else "$ command"; other tools their target
+function actTarget(f) {
+  const sh = KIND(f.tool) === "shell", desc = sh && (f.desc || "").trim();
+  if (desc) return `<span class="target" data-tip="${esc("$ " + f.target)}">${esc(desc)}</span>`;
+  return `<span class="target${sh ? " sh" : ""}" data-tip="${esc(f.target)}">${sh ? "$ " : ""}${esc(f.target)}</span>`;
+}
+
+// rename: inline input in the header; header re-renders pause while it's open
+let renaming = false;
+$("agent-head").addEventListener("click", e => {
+  if (e.target.id !== "rename") return;
+  renaming = true;
+  $("aname").innerHTML = `<input id="rename-in" value="${esc(view.name)}" aria-label="New name" maxlength="40"> <button class="btn" id="rename-ok" type="button" aria-label="Save" title="Save the new name (Enter)">✓</button><button class="btn" id="rename-no" type="button" aria-label="Cancel" title="Cancel (Esc)">✕</button> <span class="rename-err" id="rename-err"></span>`;
+  const inp = $("rename-in"), agent = view.name;
+  const current = () => renaming && view.name === agent && $("rename-in") === inp;
+  inp.focus(); inp.select();
+  const cancel = () => { renaming = false; delete seen.agent; poll(true); };
+  const save = async () => {
+    if (!current()) return;
+    const name = inp.value.trim();
+    if (name === agent) return cancel();
+    if (!/^[A-Za-z0-9._-]{1,40}$/.test(name)) { $("rename-err").textContent = "1-40 chars of A-Z a-z 0-9 . _ -"; return; }
+    try {
+      const r = await api("/name", { method: "POST", body: JSON.stringify({ agent, name }) });
+      if (!current()) return;  // navigation or cancellation superseded this form while the rename was pending
+      renaming = false;
+      if ($("to").value === agent) $("to").value = r.name;  // a draft for it follows the new name
+      location.hash = agentHref(r.name, view.tab);
+    } catch (err) { if (current()) $("rename-err").textContent = err.message; }
+  };
+  inp.addEventListener("keydown", ev => { if (ev.key === "Enter") save(); else if (ev.key === "Escape") cancel(); });
+  $("rename-ok").addEventListener("click", save);
+  $("rename-no").addEventListener("click", cancel);
+});
+
+// transcript: one list of entries keyed by the server's stable ids, kept in time order. The server merges in bus
+// messages and hands out opaque cursors (`next` to poll, `prev` to page back); on `reset` (new session file,
+// rewritten, truncated) everything is dropped and redrawn. Seeing an id twice is a no-op, so nothing doubles.
+const T_FIRST = 12, T_PAGE = 40;  // entries on the first read of an agent / per "load earlier"
+function setEarlier(prev) {
+  const el = $("transcript");
+  tPrev = prev || null;
+  el.querySelector(".earlier")?.remove();
+  if (tPrev) el.insertAdjacentHTML("afterbegin", `<li class="earlier"><button class="btn" type="button" title="Load 40 earlier transcript entries (also loads by itself when you scroll near the top)">load earlier</button></li>`);
+}
+function tReset(divider) {
+  const el = $("transcript");
+  el.innerHTML = divider ? `<li class="t notice divider"><time></time><div class="body">new session (the agent's transcript file changed)</div></li>` : "";
+  tIds.clear(); tCalls.clear(); tPrev = null; tNew = 0; showNewPill();
+}
+// what's on screen stays put while `fn` changes the list: pinned to the bottom stays pinned; otherwise the first
+// visible entry keeps its position (inserts above it, pages loaded on top, rollbacks)
+function keepPlace(fn) {
+  const el = $("transcript"), stuck = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const top = el.getBoundingClientRect().top;
+  const anchor = stuck ? null : [...el.querySelectorAll("li.t")].find(li => li.getBoundingClientRect().bottom > top + 1);  // never "load earlier": it is replaced
+  const before = anchor?.getBoundingClientRect().top;
+  fn();
+  if (stuck) el.scrollTop = el.scrollHeight;
+  else if (anchor?.isConnected) el.scrollTop += anchor.getBoundingClientRect().top - before;
+  return stuck;
+}
+let loadingEarlier = null;  // one page fetch at a time (repeated C / clicks / scrolling would insert the same page twice)
+const loadEarlier = () => loadingEarlier ||= loadEarlierOnce().finally(() => { loadingEarlier = null; });
+let tUndos = 0;  // rollbacks applied: a page fetched before one may still hold the rows it removed
+async function loadEarlierOnce() {
+  const name = view.name, gen = tGen, undos = tUndos;
+  if (!tPrev) return;
+  const r = await api(`/agents/${encodeURIComponent(name)}/transcript?limit=${T_PAGE}&before=${encodeURIComponent(tPrev)}`);
+  if (view.kind !== "agent" || view.name !== name || gen !== tGen || !r.available) return;  // switched, or reset meanwhile
+  if (undos !== tUndos) return;  // fetched before a rollback; the server leaves undone rows out of the next fetch
+  if (r.reset) { tGen++; keepPlace(() => { tReset(true); addEntries(r.entries); setEarlier(r.prev); }); tNext = r.next; return; }
+  const before = $("transcript").querySelectorAll("li.t").length;
+  keepPlace(() => { addEntries(r.entries); setEarlier(r.prev); });
+  const now = $("transcript").querySelectorAll("li.t").length;
+  $("chat-scope").textContent = `${now} entries`;
+  if (now > before) setTimeout(fillEarlier);  // after this load's lock clears; a page that added nothing stops it
+}
+// no scrollbar yet (a short first page, a tall window): no scroll event will ever ask for more, so ask here.
+// Not while hidden (other tabs): its height is 0 there, so it would never look full and page through everything
+function fillEarlier() {
+  const el = $("transcript");
+  if (tPrev && view.kind === "agent" && el.clientHeight && el.scrollHeight <= el.clientHeight + 200) loadEarlier().catch(err => { $("conn").textContent = err.message; });
+}
+// near the top: fetch the page above before the reader gets there
+$("transcript").addEventListener("scroll", () => {
+  const el = $("transcript");
+  if (el.scrollTop < 200 && tPrev && view.kind === "agent") loadEarlier().catch(err => { $("conn").textContent = err.message; });
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) { tNew = 0; showNewPill(); }
+}, { passive: true });
+// scrolled up while new entries arrive: a pill says how many are below instead of moving the page
+function showNewPill() {
+  const b = $("t-new"), tr = $("transcript");
+  b.hidden = !tNew;
+  b.textContent = `${tNew} new below ↓`;
+  b.style.top = `${tr.offsetTop + tr.clientHeight - 40}px`;  // over the transcript's bottom edge (compose may sit below it)
+}
+$("t-new").addEventListener("click", () => { tEnd(); tNew = 0; showNewPill(); });
+// transcript navigation: newest entry, or the last thing a person said (prompt not typed by the bus's wake-up, or a message from you)
+// narrow screens: the page scrolls too, so bring the transcript's bottom (and the message box) on screen
+function tEnd() { const el = $("transcript"); el.scrollTop = el.scrollHeight; if (innerWidth <= 1000) $("compose").scrollIntoView({ block: "nearest" }); }
+const isHumanEntry = li => (li.classList.contains("prompt") && !/^\s*\[(arke|agentbus)\]/.test(li.querySelector(".txt")?.dataset.raw || ""))
+  || (li.classList.contains("bus") && li.dataset.from === "human");
+async function tCatchUp() {
+  const el = $("transcript"), name = view.name;
+  for (let i = 0; i < 25; i++) {  // page back until one is loaded or the transcript starts
+    const hit = [...el.querySelectorAll("li.t")].reverse().find(isHumanEntry);
+    if (hit) { hit.scrollIntoView({ block: hit.offsetHeight > el.clientHeight ? "start" : "center" }); hit.classList.remove("flash"); void hit.offsetWidth; hit.classList.add("flash"); return; }
+    if (!tPrev || view.name !== name) break;
+    await loadEarlier();
+  }
+  toast("No message from a person in this transcript");
+}
+$("t-end").addEventListener("click", tEnd);
+$("t-catchup").addEventListener("click", () => tCatchUp().catch(err => { $("conn").textContent = err.message; }));
+document.addEventListener("keydown", e => {
+  if (view.kind !== "agent" || e.ctrlKey || e.metaKey || e.altKey || e.repeat || !$("chat").offsetParent) return;  // transcript not on screen
+  if (!["help", "inbox", "cpick", "colpop"].every(id => $(id).hidden)) return;  // an overlay is open
+  if (document.activeElement?.matches("input, textarea, select, [contenteditable]")) return;  // typing a message
+  if (e.key === "End") { e.preventDefault(); tEnd(); }
+  else if (e.key === "c" || e.key === "C") { e.preventDefault(); tCatchUp().catch(err => { $("conn").textContent = err.message; }); }
+});
+$("transcript").addEventListener("click", ev => { if (ev.target.closest(".earlier button")) loadEarlier().catch(err => { $("conn").textContent = err.message; }); });
+async function pollTranscript(a, pre = null) {
+  const el = $("transcript"), gen = tGen, asked = tNext;
+  // first read: only the last few entries, so switching agents is quick; older pages load on scroll / "load earlier".
+  // `pre`: a prefetched first read (pinned agents, see prefetchPins)
+  const r = pre || await api(`/agents/${encodeURIComponent(a.name)}/transcript?` + (tNext ? `cursor=${encodeURIComponent(tNext)}` : `limit=${T_FIRST}`));
+  if (view.kind !== "agent" || view.name !== a.name || gen !== tGen) return;  // switched agents while this was loading
+  if (tNext !== asked) return;  // a newer poll already moved on: this older reply could undo its rollbacks or cursor
+  if (!r.available) {
+    if (tAvailable !== false) el.innerHTML = `<li class="unavailable"><strong>Transcript not available</strong>${esc(r.reason)}<br>Summary, recent activity and messages still update.</li>`;
+    tAvailable = false; tNext = ""; $("chat-scope").textContent = ""; return;
+  }
+  const first = !tNext || r.reset || tAvailable === false;
+  if (first) { tGen++; tReset(r.reset && tAvailable === true); }
+  tAvailable = true; tNext = r.next;
+  const added = { n: 0 };
+  // a page-shaped reply (first read, reset, or the first read after an empty file) says what's above it
+  const stuck = keepPlace(() => { if ("prev" in r) setEarlier(r.prev); added.n = addEntries(r.entries); });
+  if (first) { el.scrollTop = el.scrollHeight; fillEarlier(); }
+  else if (!stuck && added.n) { tNew += added.n; showNewPill(); }
+  $("chat-scope").textContent = `${el.querySelectorAll("li.t").length} entries`;
+}
+
+// entries -> <li>s in the transcript. Transcript rows keep file order; a bus message goes by time, so the agent's
+// lines from just before it slot in above it when they arrive. A tool result folds into its call (by id; else the
+// preceding call in file order, else its own row). Returns how many rows were added.
+const fileOrder = id => { const [o, k] = String(id).split(":"); return o === "bus" ? null : Number(o) + Number(k) / 1000; };
+function precedingTool(id, kind) {
+  return [...$("transcript").querySelectorAll("li.t.tool")].reverse().find(li =>
+    fileOrder(li.dataset.id) < fileOrder(id) && (kind !== "shell" || li.dataset.tool === "shell"))?.querySelector("details");
+}
+// Returns how many rows went in at the bottom (for the "N new below" pill).
+function addEntries(entries) {
+  const el = $("transcript");
+  let added = 0, toolAbove = false;  // a call that lands above existing rows can adopt fallback results already shown
+  for (const e of entries.map(canonEntry)) {
+    if (tIds.has(e.id)) continue;
+    tIds.add(e.id);
+    if (e.kind === "result") {
+      e.fallback = !e.for || e.for === "shell";
+      const call = e.for && e.for !== "shell" ? tCalls.get(e.for) : precedingTool(e.id, e.for);
+      if (call) { call.insertAdjacentHTML("beforeend", outPre(e)); if (e.error) call.closest("li")?.classList.add("err"); continue; }
+      e.kind = "output";  // its call isn't loaded (on a page above): shown on its own until that page arrives
+    }
+    if (e.kind === "rollback") keepPlace(() => rollback(e.undo_from, e.undo_to));  // then shown as a one-line note
+    const li = entryLi(e);
+    if (!li) continue;
+    if (e.kind === "output" && e.for) li.dataset.for = e.for;
+    const ord = fileOrder(e.id);
+    li.dataset.ts = e.ts; li.dataset.id = e.id;
+    // walk back from the end past every row that belongs after this one; rows without a time (load earlier, the
+    // new-session divider) are walls
+    let at = null;
+    for (let p = el.lastElementChild; p?.dataset.ts; p = p.previousElementSibling) {
+      const po = fileOrder(p.dataset.id);
+      const after = ord == null || po == null ? Number(p.dataset.ts) > e.ts : po > ord;
+      if (!after) break;
+      at = p;
+    }
+    el.insertBefore(li, at);
+    if (!at) added++;
+    if (e.kind === "tool") {
+      toolAbove ||= !!at;
+      li.dataset.tool = e.tool;
+      const d = li.querySelector("details");
+      if (e.call) {
+        tCalls.set(e.call, d);
+        // its output arrived first (it was on the newer page): move it in
+        for (const o of el.querySelectorAll(`li.output[data-for="${CSS.escape(e.call)}"]`)) { const out = o.querySelector("pre"); if (out.classList.contains("err")) li.classList.add("err"); d.append(out); o.remove(); }
+      }
+    }
+  }
+  // Fallback results may arrive before their older call; a newly loaded intervening call wins in file order.
+  if (toolAbove) for (const out of el.querySelectorAll("pre.out[data-fallback]")) {
+    const call = precedingTool(out.dataset.id, out.dataset.fallback);
+    if (call && out.parentElement !== call) {
+      const row = out.closest("li");
+      if (out.classList.contains("err")) call.closest("li").classList.add("err");
+      call.append(out);
+      if (row.classList.contains("output")) row.remove();
+    }
+  }
+  return added;
+}
+const outPre = e => `<pre class="out${e.error ? " err" : ""}"${e.fallback ? ` data-fallback="${esc(e.for || "")}" data-id="${esc(e.id)}"` : ""}>${esc(e.text) || "(no output)"}${e.truncated ? `<span class="cut">… cut</span>` : ""}</pre>`;
+// Codex undid some turns: the server says which byte range of its transcript they were in. Drop the agent's rows
+// from it, as Codex's own screen does (pages loaded later come without them). Bus messages stay (they happened).
+function rollback(from, to) {
+  tUndos++;
+  for (const li of [...$("transcript").querySelectorAll("li.t")]) {
+    const o = li.dataset.id ? fileOrder(li.dataset.id) : null;  // the divider and bus rows have no file position
+    if (o == null || !(o >= from && o < to)) continue;
+    tIds.delete(li.dataset.id);
+    for (const [k, d] of tCalls) if (li.contains(d)) tCalls.delete(k);
+    li.remove();
+  }
+}
+function entryLi(e) {
+  const time = `<time>${clock(e.ts)}</time>`;
+  // prompts/replies never collapse; bus messages only when this agent sent them to another agent (not you)
+  const human = e.from === "human" || (e.to || []).includes("human");
+  const cut = e.truncated ? `<span class="cut">… cut (longer than the server keeps)</span>` : "";
+  let html;
+  if (e.kind === "prompt") html = `<li class="t prompt${e.command ? " cmdp" : ""}">${time}<div class="body"><span class="role">${e.command ? "command" : "prompt"}</span>${e.command ? `<code>${esc(e.text)}</code>` : txt(e.text)}${cut}</div></li>`;
+  else if (e.kind === "assistant") html = `<li class="t assistant">${time}<div class="body">${txt(e.text)}${cut}</div></li>`;
+  else if (e.kind === "thinking") html = `<li class="t thinking">${time}<div class="body"><details><summary>thinking</summary>${txt(e.text)}${cut}</details></div></li>`;
+  else if (e.kind === "notice") html = `<li class="t notice${e.level === "error" ? " err" : ""}">${time}<div class="body">${e.detail
+    ? `<details><summary>${esc(e.text)}</summary><pre>${esc(e.detail)}</pre></details>` : esc(e.text)}</div></li>`;
+  else if (e.kind === "rollback") html = `<li class="t notice">${time}<div class="body">undid ${e.turns} turn${e.turns === 1 ? "" : "s"} (Codex rollback)</div></li>`;
+  else if (e.kind === "output") html = `<li class="t output">${time}<div class="body">${outPre(e)}</div></li>`;
+  else if (e.kind === "bus") html = `<li class="t bus${e.board ? " board" : ""}" data-from="${esc(e.from)}"${e.board ? ' data-tip="board post: this agent only got a one-line note, not the text"' : ""}>${time}<div class="body band ${e.outgoing ? "sent" : "recv"}${e.to.includes("human") ? " for-you" : ""}" ${band(e.from, e.to[0] || "")}><span class="role">${e.outgoing
+    ? `→ ${e.to.map(n => recipient({ kind: kindOf(n), name: n })).join(", ")}` : `← ${e.from === "human" ? "you" : agentLink(e.from)}`}</span>${txt(e.text, e.outgoing && !human)}</div></li>`;
+  else if (e.kind === "tool") {  // shell: summary = description (else the command's first line), expanded = $ command, divider, output
+    // (output is appended by the "result" entry for it); others: target, expanded = key: value lines
+    // file edits (e.edits non-empty): one short line per file, "path +N −M", instead of the target
+    const sum = e.command ? e.desc || e.command.split("\n")[0] : e.desc || e.target, eds = Array.isArray(e.edits) ? e.edits : [];
+    const head = eds.length ? `<span class="kind">${esc(e.tool)}</span><span class="eds">${eds.map(editLine).join("")}</span>`
+      : `<span class="kind">${esc(e.tool)}</span> ${esc(sum)}`;
+    html = `<li class="t tool">${time}<div class="body"><details><summary${eds.length ? ' class="edsum"' : ` data-tip="${esc(e.command && e.desc ? "$ " + e.command : sum)}"`}>${head}</summary>${e.command
+      ? `<pre class="cmd"><span class="ps">$ </span>${esc(e.command)}</pre>` : `<pre>${esc(kv(e.input))}</pre>`}</details></div></li>`;
+  } else return null;  // a kind this console doesn't know yet
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  return t.content.firstElementChild;
+}
+
+// one edited file in a transcript tool line: shortened path (full in the tooltip), new/deleted tag, +added −deleted lines
+const shortPath = p => { const s = String(p || "").split("/").filter(Boolean); return s.length > 2 ? "…/" + s.slice(-2).join("/") : String(p || ""); };
+const editLine = d => `<span class="ed"><span class="path" data-tip="${esc(d.path)}">${esc(shortPath(d.path))}</span>`
+  + (d.op === "add" ? ' <span class="edtag">new</span>' : d.op === "delete" ? ' <span class="edtag gone">deleted</span>' : "")
+  + ` <span class="plus">+${Number(d.add) || 0}</span>${d.del != null ? ` <span class="minus">−${Number(d.del) || 0}</span>` : ""}</span>`;
+// tool input JSON -> "key: value" lines (raw text if it isn't a JSON object, e.g. truncated)
+function kv(input) {
+  let o; try { o = JSON.parse(input); } catch { return input; }
+  return o && typeof o === "object" ? Object.entries(o).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n") : input;
+}
+
+function recipient(t) {
+  if (t.kind === "broadcast") return `<span class="bcast">* everyone</span>`;
+  if (t.kind === "human") return `<span class="you">you</span>`;
+  return t.kind === "project" ? projLink(t.name) : agentLink(t.name, "to");
+}
+
+// collapse rules (incoming never collapses): never to/from you; on an agent page only what that agent sent;
+// on the overview/project pages, messages addressed to the viewed context (that project, a parent or subproject of it,
+// or everyone) count as incoming there and stay open
+function feedCollapses(m) {
+  if (m.from === "human" || m.to.some(t => t.kind === "human")) return false;
+  if (view.kind === "all") return false;  // the home view collapses nothing
+  if (view.kind === "agent") return m.from === view.name;
+  return !m.to.some(t => t.kind === "broadcast" || (view.kind === "project" && t.kind === "project" && (under(t.name, view.path) || under(view.path, t.name))));
+}
+// feed: newest first; new messages are prepended
+function appendFeed(msgs) {
+  if (!msgs.length) { if (!lastId) $("feed").innerHTML = `<li class="empty">No messages yet.</li>`; return; }
+  if (!lastId) $("feed").innerHTML = "";
+  const fresh = lastId > 0;
+  const docH = document.documentElement.scrollHeight;
+  queueMicrotask(() => { if (fresh && scrollY > 0) scrollBy(0, document.documentElement.scrollHeight - docH); });
+  $("feed").insertAdjacentHTML("afterbegin", msgs.slice().reverse().map(m => msgLi(m, fresh)).join(""));
+  lastId = msgs[msgs.length - 1].id;  // only once drawn: a batch that failed to render is fetched again
+  if (!feedOldest) { feedOldest = msgs[0].id; $("feed-older").hidden = msgs.length < LOG_PAGE; }
+  $("msg-scope").textContent = `${$("feed").querySelectorAll(".msg").length} messages`;
+}
+function msgLi(m, fresh) {
+  // direction: relative to the agent in an agent view; elsewhere "sent" means sent by you
+  const dir = (view.kind === "agent" ? m.from === view.name : m.from === "human") ? " sent" : " recv";
+  const cls = " band" + dir + (m.from === "human" ? " mine" : m.to.some(t => t.kind === "human") ? " for-you" : "");
+  const where = `sent from ${m.host}${m.cwd ? ":" + m.cwd : ""}`;
+  const collapse = feedCollapses(m);
+  return `<li class="msg${cls}${m.mode === "board" ? " board" : ""}${fresh ? " new" : ""}" data-id="${m.id}" ${band(m.from, m.to[0]?.name || "")}><time datetime="${new Date(m.ts * 1000).toISOString()}" tabindex="0" data-tip="${esc(where)}">${clock(m.ts)}</time>
+      <div><div class="route">${m.from === "human" ? `<span class="who">you</span>` : agentLink(m.from, "who")}${m.fromAs ? ` <span class="sub" data-tip="sent before it was renamed">(as ${esc(m.fromAs)})</span>` : ""} → ${m.to.map(recipient).join(", ")}${m.mode === "board" ? ' <span class="board-tag">board</span>' : ""}</div>
+      ${txt(m.text, collapse)}</div></li>`;
+}
+// older messages: one page at a time below the oldest shown (the feed is newest first)
+const LOG_PAGE = 200;  // the server's default page
+let feedOldest = 0;
+$("feed-older").addEventListener("click", async () => {
+  const b = $("feed-older"), at = feedOldest, q = logQuery();
+  b.disabled = true;
+  try {
+    const msgs = (await api(`/log?${q}&before=${at}`)).map(canonMsg);
+    if (feedOldest !== at || logQuery() !== q) return;  // the view changed meanwhile (two views can share an oldest id)
+    if (msgs.length) { feedOldest = msgs[0].id; $("feed").insertAdjacentHTML("beforeend", msgs.slice().reverse().map(m => msgLi(m, false)).join("")); }
+    b.hidden = msgs.length < LOG_PAGE;
+    $("msg-scope").textContent = `${$("feed").querySelectorAll(".msg").length} messages`;
+    fit();
+  } catch (e) { $("conn").textContent = `Can't load older messages: ${e.message}`; }
+  finally { b.disabled = false; }
+});
+
+// a message to you is waiting until you've sent something its sender received afterwards
+// messages to you: unanswered until you send that agent something later, or mark it done (ids in localStorage "ab.done");
+// only messages naming the agent count: a board post or broadcast it merely reaches is not a reply
+let mineLast = [];
+let lastReplyTo = new Map();
+let doneIds = (() => { try { const d = JSON.parse(pref("done", "[]")); return new Set(Array.isArray(d) ? d : []); } catch (e) { console.warn("bad saved done list", e); return new Set(); } })();
+const saveDone = () => setPref("done", JSON.stringify([...doneIds]));
+const repliedTo = m => (lastReplyTo.get(m.from) || 0) > m.id;
+function renderWaiting(mine) {
+  mineLast = mine;
+  lastReplyTo = new Map();
+  for (const m of mine) if (m.from === "human") for (const t of m.to) if (t.kind === "agent") lastReplyTo.set(t.name, Math.max(lastReplyTo.get(t.name) || 0, m.id));
+  const toMe = mine.filter(m => m.to.some(t => t.kind === "human"));
+  const open = toMe.filter(m => !repliedTo(m) && !doneIds.has(m.id));
+  const who = new Set(open.map(m => m.from));
+  // always shown (the list keeps recently cleared ones); muted when nothing is waiting
+  $("waiting").hidden = false;
+  $("waiting").classList.toggle("none", !open.length);
+  $("waiting").textContent = `${open.length} unanswered` + (who.size > 1 ? ` · ${who.size} agents` : "");
+  if (!$("inbox").hidden) renderInbox();
+}
+function renderInbox() {
+  const toMe = mineLast.filter(m => m.to.some(t => t.kind === "human")).reverse();  // newest first
+  const row = (m, open) => `<li class="msg band recv for-you${open ? "" : " cleared"}" ${band(m.from, "human")}><time data-tip="${esc(new Date(m.ts * 1000).toLocaleString())}" tabindex="0">${clock(m.ts)}</time><div>
+    <div class="route">${agentLink(m.from, "who")} → <span class="you">you</span> ${open ? "" : `<span class="sub">${doneIds.has(m.id) ? "marked done" : "replied"}</span>`}
+    <span class="acts"><button class="btn" type="button" data-reply="${esc(m.from)}" title="Open ${esc(m.from)} with the message box ready">reply</button>${open
+      ? `<button class="btn" type="button" data-done="${m.id}" title="Mark handled without replying">done</button>` : doneIds.has(m.id) ? `<button class="btn" type="button" data-undone="${m.id}" title="Put it back on the unanswered list">undo</button>` : ""}</span></div>
+    ${txt(m.text)}</div></li>`;
+  const open = toMe.filter(m => !repliedTo(m) && !doneIds.has(m.id));
+  $("inbox-open").innerHTML = open.map(m => row(m, true)).join("") || `<li class="empty">Nothing waiting on you.</li>`;
+  $("inbox-done").innerHTML = toMe.filter(m => !open.includes(m)).slice(0, 20).map(m => row(m, false)).join("") || `<li class="empty">None.</li>`;
+}
+$("waiting").addEventListener("click", () => { $("inbox").hidden = false; renderInbox(); });
+$("inbox-close").addEventListener("click", () => { $("inbox").hidden = true; });
+$("inbox").addEventListener("click", e => {
+  if (e.target.id === "inbox") { $("inbox").hidden = true; return; }
+  const b = e.target.closest("[data-done], [data-undone], [data-reply]");
+  if (!b) return;
+  if (b.dataset.reply) { $("inbox").hidden = true; focusNext = true; location.hash = agentHref(b.dataset.reply); if (view.kind === "agent" && view.name === b.dataset.reply) $("text").focus(); return; }
+  if (b.dataset.done) doneIds.add(Number(b.dataset.done)); else doneIds.delete(Number(b.dataset.undone));
+  saveDone(); renderWaiting(mineLast);
+});
+
+// --- compose ---
+let draftRevision = 0;
+$("compose").addEventListener("input", () => { draftRevision++; });
+let previewTimer = null, previewRevision = 0;
+function preview() {
+  const revision = ++previewRevision;  // invalidate in-flight lookups before the debounce delay
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const to = $("to").value.split(",").map(s => s.trim()).filter(Boolean);
+    const el = $("reach");
+    if (!to.length) { el.textContent = ""; el.className = "reach"; $("mode").hidden = true; return; }
+    try {
+      const r = await api(`/resolve?to=${encodeURIComponent(to.join(","))}`);
+      if (revision !== previewRevision) return;
+      $("mode").hidden = !r.has_project;
+      const board = r.has_project && $("mode-board").checked;
+      const direct = (r.to || []).filter(t => t.kind === "agent").map(t => t.name);
+      const bad = [r.unknown.length && `No agent or project named ${r.unknown.join(", ")} (projects start with /)`,
+        r.unsubscribed.length && `Nobody is subscribed to ${r.unsubscribed.join(", ")} (its members unsubscribed)`,
+        ...(r.ambiguous || []).filter(t => !t.delivered_to).map(t => `${t.name} is an old name of several agents (${t.also_old_name_of.join(", ")}); use a current name`)].filter(Boolean).join("; ");
+      el.className = "reach" + (bad ? " err" : r.broadcast ? " bcast" : "");
+      el.textContent = bad ? bad
+        : board ? `→ posts to the ${to.filter(t => t.startsWith("/") || t === "*").join(", ")} board; ${r.reach.length} can read it; ${direct.length ? "also notifies " + direct.join(", ") : "nobody is interrupted"}`
+        : r.reach.length === 1 ? `→ notifies ${r.reach[0]}` : `→ notifies `;
+      // several recipients: "N agents", hover for the list one per line
+      if (!bad && !board && r.reach.length !== 1) {
+        const n = document.createElement("span");
+        n.className = "many"; n.textContent = r.reach.length ? `${r.reach.length} agents` : "nobody";
+        if (r.reach.length) n.dataset.tip = r.reach.join("\n");
+        el.append(n);
+        if (r.broadcast) el.append(". Broadcast: use sparingly.");
+      }
+      // unreachable recipients: a short count inline, the reasons in the tooltip
+      const unr = bad ? [] : r.unreachable || [];
+      if (unr.length) {
+        const w = document.createElement("span");
+        w.className = "unr";
+        w.textContent = unr.length === 1 ? `${unr[0].name} looks unreachable` : `${unr.length} look unreachable`;
+        w.dataset.tip = unr.map(u => `${u.name}: ${u.why || u.reachable}`).join("\n") + "\nmessages are still stored";
+        el.append(w);
+      }
+    } catch (e) {
+      if (revision !== previewRevision) return;
+      el.className = "reach err"; el.textContent = `Can't check recipients: ${e.message}`;
+    }
+  }, 200);
+}
+$("to").addEventListener("input", () => { preview(); suggest(); });
+// recipient suggestions for the part after the last comma: agents (online first), human, projects, *
+let sugAt = -1;
+function suggest() {
+  const inp = $("to"), box = $("to-sug"), parts = inp.value.split(","), q = parts[parts.length - 1].trim().toLowerCase();
+  const have = new Set(parts.slice(0, -1).map(x => x.trim()));
+  const showHid = pref("showhidden", "no") === "yes";
+  const names = [...agents].filter(a => showHid || !hiddenAgents.has(a.name))
+    .sort((a, b) => (state(a) === "offline") - (state(b) === "offline") || a.name.localeCompare(b.name))
+    .map(a => ({ v: a.name, note: state(a) }))
+    .concat([{ v: "human", note: "you" }], projects.map(p => ({ v: p.path, note: "project" })), [{ v: "*", note: "everyone" }]);
+  const hits = names.filter(n => !have.has(n.v) && (!q || n.v.toLowerCase().includes(q))).sort((a, b) =>
+    (b.v.toLowerCase().startsWith(q)) - (a.v.toLowerCase().startsWith(q))).slice(0, 10);
+  const open = document.activeElement === inp && hits.length > 0 && !(hits.length === 1 && hits[0].v.toLowerCase() === q);
+  box.hidden = !open; inp.setAttribute("aria-expanded", open);
+  sugAt = open ? Math.min(Math.max(sugAt, 0), hits.length - 1) : -1;
+  box.innerHTML = hits.map((n, i) => `<li role="option" data-v="${esc(n.v)}"${i === sugAt ? ' aria-selected="true"' : ""}><span ${n.v.startsWith("/") || n.v === "*" || n.v === "human" ? "" : cAttr(n.v)}>${esc(n.v)}</span><span class="sub">${esc(n.note)}</span></li>`).join("");
+}
+function pickSug(v) {
+  const inp = $("to"), parts = inp.value.split(",");
+  parts[parts.length - 1] = (parts.length > 1 ? " " : "") + v;
+  inp.value = parts.join(",");
+  draftRevision++;
+  preview(); $("to-sug").hidden = true; sugAt = -1;
+}
+$("to").addEventListener("keydown", e => {
+  const box = $("to-sug"), items = box.querySelectorAll("li");
+  if (e.key === "Enter") e.preventDefault();  // Enter picks a suggestion, never sends: Ctrl+Enter in the message box does
+  if (box.hidden || !items.length) { if (e.key === "ArrowDown") { suggest(); e.preventDefault(); } return; }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sugAt = (sugAt + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; suggest(); }
+  else if (e.key === "Enter" || e.key === "Tab") { if (sugAt >= 0) { e.preventDefault(); pickSug(items[sugAt].dataset.v); } }
+  else if (e.key === "Escape") { box.hidden = true; e.stopPropagation(); }
+});
+$("to").addEventListener("focus", suggest);
+$("to").addEventListener("blur", () => setTimeout(() => { $("to-sug").hidden = true; }, 150));
+$("to-sug").addEventListener("mousedown", e => { const li = e.target.closest("li"); if (li) { e.preventDefault(); pickSug(li.dataset.v); } });
+$("mode").addEventListener("change", preview);
+// project view: which messages the feed shows; switching refetches the feed from scratch
+$("pscope").addEventListener("change", e => {
+  setPref("pscope", e.target.value);
+  lastId = 0; feedOldest = 0; $("feed-older").hidden = true; $("feed").innerHTML = "";
+  poll(true);
+});
+$("text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("compose").requestSubmit(); });
+const pendingSends = new Map();  // an uncertain response retries the same operation, not a second message
+let sending = false;
+$("compose").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (sending) return;
+  const to = $("to").value.split(",").map(s => s.trim()).filter(Boolean);
+  const typed = $("text").value, text = typed.trim(), revision = draftRevision, page = viewTo();
+  const status = $("status");
+  status.textContent = ""; $("send-err").textContent = "";
+  if (!to.length || !text) { status.className = "status err"; status.textContent = "Add a recipient and a message."; return; }
+  const body = { to, text, mode: $("mode-board").checked ? "board" : "notify" }, key = JSON.stringify(body);
+  if (!pendingSends.has(key)) pendingSends.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""));
+  body.request_id = pendingSends.get(key);
+  sending = true;
+  const button = $("compose").querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const r = await api("/send", { method: "POST", body: JSON.stringify(body) });
+    if (pendingSends.get(key) === body.request_id) pendingSends.delete(key);
+    if (draftRevision === revision && $("text").value === typed) {  // only clear an untouched submission
+      $("text").value = "";
+      // sent from another page: the next message is for this one, as if the draft had been empty on arrival
+      if (viewTo() !== page) { $("to").value = viewTo(); $("mode-notify").checked = true; preview(); }
+    }
+    status.className = "status";
+    status.textContent = (r.mode === "board" ? `Posted to the board (#${r.id}).` : `Sent to ${r.reach.join(", ")} (#${r.id}).`)
+      + (r.renamed || []).map(x => ` Note: ${x.old} is now called ${x.new}.`).join("")
+      + (r.ambiguous || []).map(x => ` Note: ${x.name} is also an old name of ${x.also_old_name_of.join(", ")}; delivered to the current ${x.name}.`).join("");
+    poll(true);
+  } catch (err) {  // stays until the next send attempt; the typed message is kept
+    const refused = err.status >= 400 && err.status < 500;  // the bus answered no; nothing was sent
+    status.className = "status err"; status.textContent = `${refused ? "Not sent" : "Send not confirmed"}: ${err.message}`;
+    $("send-err").textContent = refused ? `Not sent: ${err.message}` : `Send not confirmed. Retry to check the same message: ${err.message}`;
+  } finally {
+    sending = false;
+    button.disabled = false;
+  }
+});
+
+// --- tooltips: [data-tip] shows instantly in a fixed box (not clipped by overflow:hidden);
+// ellipsis-truncated elements only show it when actually truncated. Tap/focus shows it on touch. ---
+let tipFor = null;
+function showTip(el) {
+  if (!el || !el.dataset.tip) return hideTip();
+  if (getComputedStyle(el).textOverflow === "ellipsis" && el.scrollWidth <= el.clientWidth && !el.dataset.tip.includes("\n")) return hideTip();
+  const tip = $("tip"), r = el.getBoundingClientRect();
+  tipFor = el; tip.textContent = el.dataset.tip; tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.max(4, Math.min(r.left, innerWidth - w - 4)) + "px";
+  // below if it fits, else above if it fits, else pinned to the viewport bottom (tall tips may cover the element)
+  tip.style.top = (r.bottom + 4 + h <= innerHeight ? r.bottom + 4 : r.top - h - 4 >= 0 ? r.top - h - 4 : Math.max(4, innerHeight - h - 4)) + "px";
+}
+function hideTip() { tipFor = null; $("tip").hidden = true; }
+document.addEventListener("mouseover", e => { const el = e.target.closest("[data-tip]"); if (el !== tipFor) el ? showTip(el) : hideTip(); });
+document.addEventListener("focusin", e => showTip(e.target.closest("[data-tip]")));
+document.addEventListener("click", e => { const el = e.target.closest("[data-tip]"); el ? showTip(el) : hideTip(); });
+addEventListener("scroll", hideTip, true);
+
+// --- header prefs ---
+$("theme").value = pref("theme", "system");
+$("theme").addEventListener("change", e => { setPref("theme", e.target.value); applyTheme(); });
+$("mdmode").value = mdOn ? "rendered" : "plain";
+$("mdmode").addEventListener("change", e => { mdOn = e.target.value === "rendered"; setPref("md", e.target.value); rerenderText(); });
+function setTree(off) { document.body.classList.toggle("tree-off", off); $("tree-open").hidden = !off; setPref("tree-off", off ? "1" : "0"); }
+setTree(pref("tree-off", "0") === "1");
+$("tree-close").addEventListener("click", () => setTree(true));
+$("tree-open").addEventListener("click", () => setTree(false));
+
+// --- agent overview side column: collapse button and drag-to-resize handle ---
+$("side-toggle").addEventListener("click", () => { sideOff = !sideOff; setPref("side-off", sideOff ? "1" : "0"); applyTab(); });
+$("handle").addEventListener("pointerdown", e => {
+  const h = e.currentTarget, box = $("split").getBoundingClientRect();
+  h.setPointerCapture(e.pointerId); h.classList.add("drag");
+  const move = ev => {
+    sideW = Math.round(Math.max(260, Math.min(box.width * 0.6, box.right - ev.clientX - 4)));
+    $("split").style.setProperty("--side-w", sideW + "px");
+  };
+  const up = () => { h.classList.remove("drag"); h.removeEventListener("pointermove", move); setPref("side-w", sideW); };
+  h.addEventListener("pointermove", move);
+  h.addEventListener("pointerup", up, { once: true });
+});
+
+async function loadHelp() {
+  try {
+    const r = await fetch("/help");
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    $("help-text").textContent = await r.text();
+  } catch (err) { $("help-text").textContent = `Couldn't load ${BUS_LABEL}/help: ${err.message}`; }
+}
+const closeHelp = () => { if (!$("help").hidden) location.hash = helpBack; };
+$("help-close").addEventListener("click", closeHelp);
+$("help").addEventListener("click", e => { if (e.target.id === "help") closeHelp(); });  // click on the dimmed backdrop
+document.addEventListener("keydown", e => { if (e.key === "Escape") { closeHelp(); $("inbox").hidden = true; $("cpick").hidden = true; $("colpop").hidden = true; } });
+
+// --- color picker: a swatch ([data-pick]) opens it; saves via POST /color, null resets to the hashed default ---
+let pickFor = null;
+document.addEventListener("click", e => {
+  const sw = e.target.closest("[data-pick]"), cp = $("cpick");
+  if (!sw) { if (!e.target.closest("#cpick")) cp.hidden = true; return; }
+  e.preventDefault();
+  pickFor = sw.dataset.pick; $("cp-in").value = colorOf(pickFor); cp.hidden = false;
+  const r = sw.getBoundingClientRect();
+  cp.style.left = Math.max(4, Math.min(r.left, innerWidth - cp.offsetWidth - 4)) + "px"; cp.style.top = r.bottom + 4 + "px";
+});
+// colors: {target: "#rrggbb" | null}, saved in one POST
+async function saveColors(colors, what) {
+  try {
+    const r = await api("/color", { method: "POST", body: JSON.stringify({ colors }) });
+    for (const [t, c] of Object.entries(r.colors)) {
+      const o = t.startsWith("/") ? projects.find(p => p.path === t) : agents.find(a => a.name === t);
+      if (o) o.color = c;
+    }
+    applyColors(); $("conn").textContent = "";
+  } catch (err) { $("conn").textContent = `Can't set the color of ${what}: ${err.message}`; }
+}
+async function setColor(color) { await saveColors({ [pickFor]: color }, pickFor); $("cp-in").value = colorOf(pickFor); }
+// re-roll: every project and agent (projects first, then agents grouped by their first project) steps around the
+// wheel by the golden angle from a random start, so any run of neighbours is well separated. Hues stay in 25..325
+// (no reds, which read as errors); saturation and lightness cycle with coprime periods (3, 4) for extra contrast.
+// Hex values are kept unique.
+function rerollColors() {
+  const ps = projects.map(p => p.path).sort(), home = a => Object.keys(a.projects).find(p => a.projects[p]) || Object.keys(a.projects)[0] || "";
+  const names = ps.concat(agents.slice().sort((a, b) => home(a).localeCompare(home(b)) || a.name.localeCompare(b.name)).map(a => a.name));
+  const out = Object.create(null), used = new Set(), g = (Math.sqrt(5) - 1) / 2, f0 = Math.random();
+  names.forEach((n, i) => {
+    let h = 25 + 300 * ((f0 + i * g) % 1), c;
+    do { c = hsl(h, [0.6, 0.45, 0.72][i % 3], [0.45, 0.58, 0.36, 0.66][i % 4]); h = 25 + (h - 25 + 3) % 300; } while (used.has(c));
+    used.add(c); out[n] = c;
+  });
+  return out;
+}
+// random: every agent and project gets its own uniformly random color (any hue, reds included)
+const randomColors = () => Object.fromEntries([...agents.map(a => a.name), ...projects.map(p => p.path)]
+  .map(n => [n, "#" + Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, "0")]));
+for (const b of document.querySelectorAll("[data-reroll]")) b.addEventListener("click", () => {
+  if (confirm("Replace every agent and project color with a fresh, well-separated palette?")) saveColors(rerollColors(), "everything");
+});
+for (const b of document.querySelectorAll("[data-randcolors]")) b.addEventListener("click", () => {
+  if (confirm("Replace every agent and project color with an independent random color?")) saveColors(randomColors(), "everything");
+});
+$("colors-reset").addEventListener("click", () => {
+  if (confirm("Reset every agent and project color to its default?"))
+    saveColors(Object.fromEntries([...agents.map(a => a.name), ...projects.map(p => p.path)].map(n => [n, null])), "everything");
+});
+$("cp-in").addEventListener("change", e => setColor(e.target.value));
+$("cp-rand").addEventListener("click", () => setColor(hsl(Math.floor(Math.random() * 360))));
+$("cp-reset").addEventListener("click", () => setColor(null));
+
+// --- carousel keys: rebindable combos ("PageUp", "Alt+ArrowUp") in localStorage "ab.keys" ---
+const KEYS0 = { prev: "PageUp", next: "PageDown" };
+let keys = (() => { try { const k = JSON.parse(pref("keys", "null")); return k && typeof k.prev === "string" && typeof k.next === "string" ? k : { ...KEYS0 }; } catch (e) { console.warn("bad saved keys, using the defaults", e); return { ...KEYS0 }; } })();
+const MODS = ["Control", "Alt", "Shift", "Meta"];
+// "Ctrl+Alt+Shift+Meta+<key>" in that order; null for a bare modifier press
+const comboOf = e => MODS.includes(e.key) ? null : [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta", e.key.length === 1 ? e.key.toUpperCase() : e.key].filter(Boolean).join("+");
+const keysLabel = () => `${keys.prev} / ${keys.next}`;
+function renderKeys() { for (const i of document.querySelectorAll("[data-keycap]")) i.value = keys[i.dataset.keycap]; $("keys-reset").hidden = keys.prev === KEYS0.prev && keys.next === KEYS0.next; }
+for (const i of document.querySelectorAll("[data-keycap]")) i.addEventListener("keydown", e => {
+  if (e.key === "Tab" || e.key === "Escape") return;  // keep focus moving / help closing
+  e.preventDefault(); e.stopPropagation();
+  const c = comboOf(e);
+  if (!c) return;
+  keys[i.dataset.keycap] = c; setPref("keys", JSON.stringify(keys)); renderKeys(); delete seen.strip; renderStrip();
+});
+$("keys-reset").addEventListener("click", () => { keys = { ...KEYS0 }; setPref("keys", JSON.stringify(keys)); renderKeys(); delete seen.strip; renderStrip(); });
+renderKeys();
+
+let toastTimer = null;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 3000); }
+
+// --- carousel strip on an agent page: the pinned agents (in pin order, ◀ ▶ move the current one), else the context project's agents ---
+function stripAgents() {
+  const p = view.kind === "agent" && view.ctx, hide = pref("offline", "hide") === "hide";
+  return !p ? [] : agents.filter(a => inProj(a.name, p) && (a.name === view.name || !hide || state(a) !== "offline"))
+    .map(a => a.name).sort((x, y) => x.localeCompare(y));
+}
+function renderStrip() {
+  const ns = pins.length ? pins : stripAgents();
+  if (!changed("strip", [ns, pins.length, view.name, view.tab, view.ctx, agents.map(a => a.color), keys])) return;
+  $("strip").hidden = false;  // always: it carries the "all agents" link
+  const mv = d => `<button class="btn mv" type="button" data-mv="${d}" title="Move ${esc(view.name)} ${d < 0 ? "earlier" : "later"} in the pins">${d < 0 ? "◀" : "▶"}</button>`;
+  const link = n => `<a class="name" ${cAttr(n)} data-pin="${esc(n)}" title="Drag to reorder the pins" href="#agent/${encodeURIComponent(n)}${view.tab && view.tab !== "overview" ? "/" + view.tab : ""}"${n === view.name ? ' aria-current="page"' : ""}>${esc(n)}</a>`;
+  $("strip").innerHTML = `<a class="home" href="#" title="Back to all agents">all agents</a>` + (!ns.length ? "" : pins.length
+    ? `<span class="sub">★ pinned</span>` + pins.map(n => n === view.name ? `<span class="cur">${mv(-1)}${link(n)}${mv(1)}</span>` : link(n)).join("") + `<span class="sub">${esc(keysLabel())}</span>`
+    : projLink(view.ctx) + ns.map(n => `<a class="name" ${cAttr(n)} href="${agentHref(n, view.tab)}"${n === view.name ? ' aria-current="page"' : ""}>${esc(n)}</a>`).join("") + `<span class="sub">${esc(keysLabel())}</span>`);
+}
+$("strip").addEventListener("click", e => {
+  const b = e.target.closest("[data-mv]");
+  if (!b) return;
+  const i = pins.indexOf(view.name), j = i + Number(b.dataset.mv);
+  if (i < 0 || j < 0 || j >= pins.length) return;
+  const p = pins.slice(); [p[i], p[j]] = [p[j], p[i]];
+  setPins(p); renderStrip();
+});
+// drag a pinned name onto another to put it there (before it when moving left, after it when moving right)
+let dragPin = null;
+$("strip").addEventListener("dragstart", e => { const a = e.target.closest?.("[data-pin]"); dragPin = a?.dataset.pin ?? null; if (dragPin) e.dataTransfer.effectAllowed = "move"; });
+$("strip").addEventListener("dragover", e => {
+  const a = e.target.closest("[data-pin]");
+  for (const x of $("strip").querySelectorAll(".dropat")) if (x !== a) x.classList.remove("dropat");
+  if (dragPin && a && a.dataset.pin !== dragPin) { e.preventDefault(); a.classList.add("dropat"); }
+});
+$("strip").addEventListener("dragleave", e => e.target.closest?.("[data-pin]")?.classList.remove("dropat"));
+$("strip").addEventListener("drop", e => {
+  const a = e.target.closest("[data-pin]");
+  if (!dragPin || !a) return;
+  e.preventDefault();
+  const p = pins.filter(n => n !== dragPin), to = pins.indexOf(a.dataset.pin), from = pins.indexOf(dragPin);
+  p.splice(p.indexOf(a.dataset.pin) + (from < to ? 1 : 0), 0, dragPin);
+  dragPin = null; setPins(p); renderStrip();
+});
+$("strip").addEventListener("dragend", () => { dragPin = null; for (const x of $("strip").querySelectorAll(".dropat")) x.classList.remove("dropat"); });
+// prev/next key: cycles the pinned agents from anywhere (also inside the message box), landing ready to type to it;
+// with no pins, the project carousel (only from the message box, the To field, or no focus)
+document.addEventListener("keydown", e => {
+  const c = comboOf(e), dir = c === keys.next ? 1 : c === keys.prev ? -1 : 0;
+  if (!dir || !$("help").hidden) return;
+  const f = document.activeElement, free = !f || f === document.body || ["text", "to"].includes(f.id);
+  if (pins.length && !free && f.matches("input, textarea, select, [contenteditable]")) return;  // e.g. the rename box
+  if ((pins.length || free) && $("text").value.trim()) { toast("Send or clear the draft first: switching agents would change its To"); return; }
+  if (pins.length) {
+    e.preventDefault();
+    const i = view.kind === "agent" ? pins.indexOf(view.name) : -1;
+    const n = pins[i < 0 ? (dir > 0 ? 0 : pins.length - 1) : (i + dir + pins.length) % pins.length];
+    focusNext = true;
+    const h = "#agent/" + encodeURIComponent(n) + (view.kind === "agent" && view.tab !== "overview" ? "/" + view.tab : "");
+    if (location.hash === h) { focusNext = false; $("to").value = n; draftRevision++; preview(); $("text").focus(); }
+    else location.hash = h;
+    return;
+  }
+  if (!free) return;  // leave scrolling alone elsewhere
+  const ns = stripAgents(), i = ns.indexOf(view.name);
+  if (ns.length < 2 || i < 0) { if (view.kind === "agent") toast(`No pinned agents: click ☆ next to an agent to pin it, then ${keysLabel()} cycle through them`); return; }
+  e.preventDefault();
+  location.hash = agentHref(ns[(i + dir + ns.length) % ns.length], view.tab);
+});
+
+$("host").textContent = BUS_LABEL;
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

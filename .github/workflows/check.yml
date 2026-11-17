@@ -1,0 +1,25 @@
+name: Arke checks
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check in an isolated Linux container
+        run: make test-container PYTHON_VERSION=${{ matrix.python }}
+  harnesses:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise real Claude and Codex hooks and tmux with scripted model replies
+        run: make test-mocked

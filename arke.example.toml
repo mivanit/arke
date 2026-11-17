@@ -1,0 +1,24 @@
+# Copy to .local/config.toml. Environment variables override matching settings.
+# Paths are relative to this clone; ~ expands to your home directory.
+
+[server]
+port = 7777
+tailscale = false
+experimental_require_key = false     # experimental, NO GUARANTEES; see README before enabling
+# key_file = ".local/key"             # the default; used only when experimental_require_key = true
+# state_dir = ".local/server"
+# log_file = ".local/server/log.jsonl"
+ntfy_url = ""                         # empty disables phone notifications
+# Horatio (https://github.com/mivanit/horatio) is a separate machine-history service; set its URL to show
+# CPU/memory history on the analytics pages.
+# horatio_url = "http://127.0.0.1:8080"
+stale_seconds = 900
+process_interval = 15
+# transcript_roots = ["~/.claude/projects", "~/.codex/sessions"]
+# browser_hosts = ["arke.example.com"]  # extra names clients and browsers use to reach the bus (proxy, DNS alias)
+
+[client]
+# url = "http://your-bus-host:7777"   # unset: localhost using server.port
+# key_file = ".local/key"             # opt in; requires explicit client.url, copied via SSH
+# state_dir = ".local/client"
+# ARKE_URL and `arke server URL` override client.url.

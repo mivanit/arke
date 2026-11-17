@@ -1,0 +1,1370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script src="/auth.js"></script>
+<script src="/base.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arke 3D</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/vendor/three.module.min.js",
+  "three/addons/controls/OrbitControls.js": "/vendor/OrbitControls.js"
+} }
+</script>
+<link rel="stylesheet" href="/arke.css">
+<style>
+html, body { margin: 0; height: 100%; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--ground); }
+.top h1 { font: 600 17px var(--mono); margin: 0; }
+.top .host { font: 12px var(--mono); color: var(--muted); }
+.grow { flex: 1; }
+.btn, select { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; margin-left: -1px; }
+.seg .btn:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.seg .btn:last-child { border-radius: 0 4px 4px 0; }
+.status, .sub { font-size: 12px; color: var(--muted); }
+.conn { font-size: 13px; color: var(--err); background: var(--err-soft); padding: 6px 16px; white-space: pre-wrap; }
+.conn:empty { display: none; }
+
+.bar2 { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; padding: 6px 16px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.chip { border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; background: var(--tint); cursor: pointer; font: 12px var(--mono); color: var(--ink); }
+.chip:hover { border-color: var(--err); }
+.note { color: var(--warn); }
+#stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+#stage canvas { display: block; width: 100%; height: 100%; outline: none; }
+#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#labels > * { position: absolute; left: 0; top: 0; white-space: nowrap; transform-origin: 0 0; will-change: transform; }
+#labels a, #labels .h { pointer-events: auto; font: 500 12px var(--mono); color: var(--ink); text-decoration: underline 2px var(--c, var(--line-strong)); text-underline-offset: 3px;
+  text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground), 0 0 2px var(--ground); }
+#labels a:hover { color: var(--accent); }
+#labels .proj { font-size: 11.5px; }
+#labels .dir { font: 600 11px var(--mono); color: var(--muted); text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); pointer-events: auto; cursor: pointer; }
+#labels .dir:hover { color: var(--accent); }
+.bar3 { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; padding: 4px 16px 6px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.bar3 input[type=text] { font: 12px var(--mono); width: 22em; max-width: 100%; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 6px; }
+.crumb { font-family: var(--mono); color: var(--ink); cursor: pointer; } .crumb:hover { color: var(--accent); text-decoration: underline; }
+details.arr { position: relative; } details.arr > summary { cursor: pointer; list-style: none; } details.arr[open] > div { position: absolute; z-index: 40; top: 120%; right: 0; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; display: grid; grid-template-columns: auto auto; gap: 4px 8px; box-shadow: 0 4px 16px rgba(0,0,0,.15); white-space: nowrap; }
+#fphud { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); font-size: 12px; background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--line); border-radius: 5px; padding: 3px 10px; color: var(--muted); pointer-events: none; }
+#labels .tick { font: 10.5px var(--sans); color: var(--muted); text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); }
+#labels .cap { font: 600 11px var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); }
+#help { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted); background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border: 1px solid var(--line); border-radius: 5px; padding: 5px 9px; max-width: min(680px, calc(100% - 24px)); cursor: pointer; }
+#tip { position: fixed; z-index: 100; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: 5px; padding: 6px 9px; font-size: 12px; max-width: min(460px, 92vw); box-shadow: 0 4px 16px rgba(0,0,0,.18); white-space: pre-wrap; overflow-wrap: anywhere; }
+#tip .m { color: var(--muted); }
+.flag { display: inline-block; font-size: 11px; border-radius: 3px; padding: 0 5px; white-space: nowrap; }
+.flag.busy { background: var(--busy-soft); color: var(--busy); } .flag.idle { background: var(--idle-soft); color: var(--idle); } .flag.offline, .flag.off { background: var(--off-soft); color: var(--muted); }
+#pane a.name, #pane a.proj { font-family: var(--mono); font-weight: 500; text-decoration: underline 2px var(--c, var(--line-strong)); text-underline-offset: 3px; }
+#pane a.name:hover, #pane a.proj:hover { color: var(--accent); }
+.mono { font-family: var(--mono); }
+.bar2 input[type=range] { width: 120px; vertical-align: middle; }
+.bar2 label { white-space: nowrap; }
+@media (max-width: 700px) { .top, .bar2 { padding-inline: 8px; } #help { display: none; }
+  details.arr[open] > div { position: fixed; left: 8px; right: 8px; top: auto; white-space: normal; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>arke 3D</h1>
+  <span class="host" id="host"></span>
+  <a class="btn" id="console" href="/">&larr; console</a>
+  <a class="btn" id="an2d" href="analytics">analytics</a>
+  <span class="netstat wait" id="netstat" role="status">connecting</span>
+  <span class="grow"></span>
+  <span class="seg" id="ranges" role="group" aria-label="Time range">
+    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="0">all</button>
+  </span>
+  <select id="proj" aria-label="Project"><option value="">all projects</option></select>
+  <label class="status"><input type="checkbox" id="live" checked> live</label>
+  <span class="status" id="status">loading&hellip;</span>
+</header>
+<div class="conn" id="conn" role="alert"></div>
+<div class="bar2">
+  <label><input type="checkbox" id="tmsg" checked> messages</label>
+  <label><input type="checkbox" id="tedit" checked> edits</label>
+  <label><input type="checkbox" id="tread"> reads</label>
+  <label><input type="checkbox" id="tproj"> projects</label>
+  <label><input type="checkbox" id="thuman" checked> human</label>
+  <label title="Show reads as roots under the city, with see-through plots (R)"><input type="checkbox" id="roots" checked> roots</label>
+  <label title="Lines from each commit to the files it touched and to the agent that committed"><input type="checkbox" id="tgit" checked> git lines</label>
+  <span class="seg"><button class="btn" type="button" data-preset="south" title="Face the machine plane: cpu / memory / gpu over time, with a plane per busy process behind it (1)">machine</button><button class="btn" type="button" data-preset="west" title="Face each agent's total processes over time (2)">processes</button><button class="btn" type="button" data-preset="east" title="Face the git commits, a lane per repo (3)">git</button><button class="btn" type="button" data-preset="city" title="Top-down onto the city (4)">city</button><button class="btn" type="button" data-preset="up" title="Look up the agents' history from below the present (5)">up ↑</button><button class="btn" type="button" data-preset="side" title="Agents' history from the side, time left to right (6)">side</button></span>
+  <button class="btn" type="button" id="home" title="Reset the camera (0)">reset view</button>
+  <button class="btn" type="button" id="fpbtn" aria-pressed="false" title="First person (F): mouse to look, WASD to move, space/E up, ctrl (or Q/C) down, shift to sprint, Esc to leave">walk</button>
+  <label id="fpspeedl" title="First-person speed (units per second; wheel while walking)">speed <input type="range" id="fpspeed" min="10" max="300" step="10"></label>
+  <details class="arr"><summary class="btn" title="Layout, sizes, gaps and scales">arrange</summary><div>
+    <label for="glayout">agent layout</label><select id="glayout" aria-label="Graph layout" title="How the agents are arranged (shared with the 2D graph)"></select>
+    <label for="recent" title="Building heights and touch lines count only this recent span (the city plan keeps the whole window)">edits in the last <b id="recentv" class="mono"></b></label><input type="range" id="recent" min="0" max="8" step="1" value="0" aria-label="Recent span">
+    <label for="hscale" title="Building height: edits rise above the plot, reads sink below it as roots (one shared scale)">height scale</label><select id="hscale" aria-label="Height scale"><option value="log" selected>log</option><option value="linear">linear</option></select>
+    <label for="cores" title="CPU cores on the bus's machine: process cpu (% of one core) / cores = share of the whole machine, to line up with the machine's cpu %">bus machine cores</label><input type="number" id="cores" min="1" max="1024" step="1" style="width: 6em">
+    <label for="acity">city footprint</label><input type="range" id="acity" min="0.4" max="2.5" step="0.05">
+    <label for="acityh">city height</label><input type="range" id="acityh" min="0.2" max="3" step="0.05">
+    <label for="agraph">graph size</label><input type="range" id="agraph" min="0.4" max="2.5" step="0.05">
+    <label for="atime">time height</label><input type="range" id="atime" min="80" max="600" step="10">
+    <label for="gap" title="Room between the agents' cube and every face around it: the city below and the machine / process / git planes"><b>gap, all faces</b></label><input type="range" id="gap" min="0" max="200" step="10" value="0" aria-label="Gap between the agents and all faces">
+    <span class="sub" style="grid-column: 1 / -1">plus each face's own offset:</span>
+    <label for="aoc">city (below)</label><input type="range" id="aoc" min="-60" max="200" step="5">
+    <label for="aos">machine &amp; processes</label><input type="range" id="aos" min="-30" max="200" step="5">
+    <label for="aow">agents' totals</label><input type="range" id="aow" min="-30" max="200" step="5">
+    <label for="aoe">git commits</label><input type="range" id="aoe" min="-30" max="200" step="5">
+    <span class="sub" style="grid-column: 1 / -1">drag a handle (or shift-drag the city or an agent column) to move it</span>
+    <button class="btn" type="button" id="gfree" title="Unpin every agent and let the layout move them">free all agents</button>
+    <button class="btn" type="button" id="replan" title="Lay the city out again from scratch (normally it keeps its plan and builds new files on empty lots)">re-plan city</button>
+    <button class="btn" type="button" id="areset" style="grid-column: 1 / -1">reset sizes and positions</button>
+  </div></details>
+  <span id="chips"></span>
+</div>
+<div class="bar3">
+  <span title="The city shows this directory and below (click a directory label to narrow, a crumb to widen)">city: <span id="crumbs"></span></span>
+  <input type="text" id="croot" placeholder="/path/to/dir" aria-label="City root directory" spellcheck="false"><button class="btn" type="button" id="crootgo">show</button><button class="btn" type="button" id="crootreset" title="Show every touched file">all</button>
+  <span class="grow"></span>
+  <span id="sizenote"></span>
+  <span id="panelnote" class="sub"></span>
+</div>
+<div id="stage">
+  <div id="labels"></div>
+  <div id="fphud" hidden>first person · mouse looks (click to capture) · WASD move · space/E up · ctrl or Q/C down · shift sprint ×3 · Esc back to orbit</div>
+  <div id="help" title="click to hide">Below: the files as a city (footprint = log file size, height = edits, roots under the see-through plots = reads, pale lots = room for new files). Above it, each agent is a column through time: the present at the bottom, the past rising; wider, brighter = more tool calls / busy. Level links = messages; lines down to a roof = touches. Agents sit near the agents they message. Drag to orbit, right-drag to pan, wheel to zoom; drag an agent's base block to move and pin it, right-click it to pin / free. Around the agents: the machine with a plane per busy process (1), each agent's total processes (2), git commits per repo (3). Click a building or a column for details. (click to hide)</div>
+</div>
+<div id="tip" hidden></div>
+<aside id="pane" hidden aria-label="Details">
+  <div id="pgrip" title="drag to resize"></div>
+  <div class="phead"><span id="ptitle"></span><button class="btn" type="button" id="pclose" title="Close (Esc)" aria-label="Close details">&times;</button></div>
+  <div id="pbody"></div>
+</aside>
+
+<script src="graph-layout.js"></script>
+<script src="analytics-shared.js"></script>
+<script src="analytics-page.js"></script>
+<script type="module">
+"use strict";
+// errors: one compact indicator (count + the latest, one line); details go to the console once per distinct message
+const errSeen = new Map();
+function showErr(msg, err) {
+  msg = String(msg);
+  if (!errSeen.has(msg)) console.error(msg, err ?? "");
+  errSeen.set(msg, (errSeen.get(msg) || 0) + 1);
+  const n = [...errSeen.values()].reduce((a, b) => a + b, 0);
+  $("conn").textContent = `${n} error${n > 1 ? "s" : ""} (${errSeen.size} distinct), check the browser console · latest: ${msg.length > 140 ? msg.slice(0, 140) + "…" : msg}`;
+}
+addEventListener("error", ev => showErr("error: " + (ev.message || ev.error), ev.error));
+addEventListener("unhandledrejection", ev => showErr("error: " + (ev.reason?.message || ev.reason), ev.reason));
+
+window.addEventListener("arke-unlocked", () => load());
+
+let THREE, OrbitControls;
+try {
+  THREE = await import("three");
+  ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
+} catch (e) {
+  showErr(`couldn't load three.js (${e.message}). On the bus host, run python3 install-service.py --assets-only.`);
+  throw e;
+}
+
+// CSS color (possibly var(--x)) -> THREE.Color
+const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const tcolor = c => new THREE.Color(c.startsWith("var(") ? cssVar(c.slice(4, -1)) : c);
+
+
+// ---------- data (the model from analytics-shared.js) ----------
+const TYPES = "state,update,tool,message,join,rename,takeover,forget";
+let loading = false;
+
+// file sizes from GET /filesizes, for absolute paths on this server; refreshed after new activity or 30 s
+const sizes = new Map();
+async function fetchSizes(files) {
+  const want = files.filter(f => { const c = sizes.get(f.key);
+    return isLocalFile(f, agentsNow) && f.path.startsWith("/") && (!c || c.last !== f.last || c.expires <= nowS()); });
+  // at most 80 paths per request, and a query below http.server's 64 kB request-line limit (encoded queries are ASCII)
+  const jobs = [];
+  for (const f of want) {
+    const part = new URLSearchParams({ path: f.path }).toString(), job = jobs.at(-1);
+    if (!job || job.files.length === 80 || job.query.length + 1 + part.length > 60_000) jobs.push({ files: [f], query: part });
+    else { job.files.push(f); job.query += "&" + part; }
+  }
+  await Promise.all(jobs.map(async ({ files, query }) => {
+    const r = await api("/filesizes?" + query);
+    for (const f of files) sizes.set(f.key, { size: r[f.path] ?? null, last: f.last, expires: nowS() + 30 });
+  }));
+}
+// shell-parsed junk that isn't a real project file: elided paths ("..."), and temp files outside every agent's
+// working dir (an agent that works in /tmp keeps its files)
+const junkPath = p => p.includes("...") || p.startsWith("~")
+  || (p.startsWith("/tmp/") && !agentsNow.some(a => a.cwd && under(p, a.cwd)));
+
+async function load() {
+  if (loading) return; loading = true;
+  try {
+    const rotated = await readEvents(TYPES, () => { X3.procsGen++; X3.procs = []; X3.procsNext = 0; X3.procsFrom = Infinity; });
+    errSeen.clear(); $("conn").textContent = rotated;  // the bus answered: earlier errors (say, while the key was missing) are over
+    await rebuild();
+    $("status").textContent = `${raw.length.toLocaleString()} events · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
+  } catch (e) {
+    showErr(String(e.message || e), e);
+    $("status").textContent = "load failed (partial data kept)";
+    build(); await rebuild().catch(err => { showErr(String(err.message || err), err); });
+  } finally { loading = false; }
+}
+
+// ---------- view state ----------
+let fileSel = "", agentSel = "";  // range, winNow, projSel: analytics-page.js
+
+// ---------- geometry ----------
+// The agent graph and the city share one footprint in the X-Z plane: x in [-CW/2, CW/2], z in [-CD/2, CD/2].
+// The city sits on the ground (y = 0). Above it, each agent is a column through time: the present at y = YP, the
+// window's start at y = YP + TL. So the present faces the city, and edit lines drop from an agent's column (at the
+// time of the edit) onto the roof of the file's building.
+const CW = 240, CD = 170, SLAB = 0.5, HMAX = 42;
+// where things sit and how big they are (the "arrange" controls; remembered): city offset/scale, graph offset/scale, time height
+// oc / os / ow / oe: each face's own offset, added to the toolbar's gap (which moves every face together): the city below,
+// the south (machine), west (processes) and east (git) planes
+const ARR0 = { cx: 0, cz: 0, cs: 1, ch: 1, gx: 0, gz: 0, gs: 1, tl: 240, oc: 0, os: 0, ow: 0, oe: 0 };
+let ARR = { ...ARR0 };
+try { ARR = { ...ARR0, ...JSON.parse(pref("an.3arr", "{}")) }; } catch (e) { console.warn("bad saved arrangement, using defaults", e); }
+const saveArr = () => setPref("an.3arr", JSON.stringify(ARR));
+let TL = ARR.tl;
+const CXw = x => ARR.cx + ARR.cs * x, CZw = z => ARR.cz + ARR.cs * z;  // city plan coords -> world
+let YP = 62;  // the present end of the columns; 62 + the "gap" slider (room between the roofs and the agents)
+const LW = 1000, LH = Math.round(LW * CD / CW);  // the layout box (px) that maps onto the footprint
+// layout px <-> world, through the graph's offset and scale
+const toX = px => ARR.gx + ARR.gs * (px / LW - 0.5) * CW, toZ = py => ARR.gz + ARR.gs * (py / LH - 0.5) * CD;
+const toPx = x => ((x - ARR.gx) / ARR.gs / CW + 0.5) * LW, toPy = z => ((z - ARR.gz) / ARR.gs / CD + 0.5) * LH;
+const RECENT = [0, 300, 900, 1800, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 86400];  // "edits in the last ...": 0 = the whole window
+const RECENT_LABEL = ["whole window", "5 min", "15 min", "30 min", "1 h", "3 h", "6 h", "12 h", "24 h"];
+
+// ---------- graph data and layout (positions shared with analytics.html's Graph panel: localStorage "ab.an.graph.<host>") ----------
+let layoutKind = pref("an.glayout", "fr");
+if (!LAYOUTS.some(l => l[0] === layoutKind)) layoutKind = "fr";
+function savePositions(nodes) {
+  const o = savedPositions();
+  for (const a of nodes) o.set(a.name, { x: a.px / LW, y: a.py / LH, pinned: a.pinned });
+  writePositions(o);
+}
+// lay the graph out over the footprint
+function layout3d(gd, fresh) {
+  const saved = savedPositions();
+  const nodes = gd.names.map(name => { const s = saved.get(name), h = fnv(name);
+    return { name, r: 12, pinned: !!s?.pinned, px: s ? s.x * LW : LW * (0.2 + 0.6 * (h % 1000) / 1000), py: s ? s.y * LH : LH * (0.2 + 0.6 * ((h >>> 10) % 1000) / 1000), placed: !!s }; });
+  const by = new Map(nodes.map(a => [a.name, a]));
+  const edges = gd.edges.map(e => ({ ...e, na: by.get(e.a), nb: by.get(e.b) }));
+  // only a fresh layout moves agents that already have a place: otherwise they hold still (pinned for this pass) and
+  // only new agents are placed and saved, so old ones don't jump when one arrives, nor creep on every rebuild
+  const held = fresh ? [] : nodes.filter(a => a.placed && !a.pinned);
+  for (const a of held) a.pinned = true;
+  // with agents held, newcomers are placed by the springs whatever the layout: a ring of the free agents alone would put them all on one spot
+  if (ITERATIVE.has(layoutKind) || held.length) {
+    let temp = LW / 8;
+    for (let it = 0; it < 400 && temp > 0.25; it++, temp *= 0.96) if (layoutStep(ITERATIVE.has(layoutKind) ? layoutKind : "fr", nodes, edges, LW, LH, temp, null) < 0.05) break;
+  } else for (const [n, p] of layoutTargets(layoutKind, nodes, edges, LW, LH)) { const a = by.get(n); a.px = p[0]; a.py = p[1]; }
+  // spread the free agents over the city's footprint (centering forces bunch them up); pinned ones stay where they were put
+  const free = nodes.filter(a => !a.pinned);
+  if (free.length > 1 && !nodes.some(a => a.pinned)) {
+    // by rank, not raw extent: a couple of outliers would otherwise keep the busy cluster a speck in the middle
+    const rk = v => { const o = v.map((x, i) => [x, i]).sort((p, q) => p[0] - q[0]), r = new Array(v.length); o.forEach(([, i], k) => r[i] = k / (v.length - 1)); return r; };
+    const rx = rk(free.map(a => a.px)), ry = rk(free.map(a => a.py));
+    // half the way to an even spread by rank: neighbors stay neighbors, the cluster opens up over the footprint
+    free.forEach((a, i) => { a.px = 0.5 * a.px + 0.5 * LW * (0.07 + 0.86 * rx[i]); a.py = 0.5 * a.py + 0.5 * LH * (0.07 + 0.86 * ry[i]); });
+  }
+  for (const a of held) a.pinned = false;
+  const placed = fresh ? nodes : nodes.filter(a => !a.placed);
+  if (placed.length) savePositions(placed);
+  return nodes;
+}
+
+// ---------- squarified treemap (Bruls, Huizing, van Wijk 2000) ----------
+// items sorted by value, descending; lays them out in rows along the shorter side, adding to a row while
+// that keeps the row's worst aspect ratio from getting worse. Sets item.rect = [x, z, w, d].
+function squarify(items, x, y, w, h) {
+  const total = items.reduce((s, i) => s + i.value, 0);
+  if (total <= 0 || w <= 0 || h <= 0) return;
+  const scale = w * h / total;
+  let i = 0;
+  while (i < items.length) {
+    const side = Math.min(w, h);
+    let row = [items[i].value * scale], sum = row[0], best = worst(row, sum, side), j = i + 1;
+    for (; j < items.length; j++) {
+      const a = items[j].value * scale, r2 = worst([...row, a], sum + a, side);
+      if (r2 > best) break;
+      row.push(a); sum += a; best = r2;
+    }
+    const thick = sum / side;  // the row's depth across the shorter side
+    let off = 0;
+    for (let k = i; k < j; k++) {
+      const len = items[k].value * scale / thick;
+      items[k].rect = w >= h ? [x, y + off, thick, len] : [x + off, y, len, thick];
+      off += len;
+    }
+    if (w >= h) { x += thick; w -= thick; } else { y += thick; h -= thick; }
+    i = j;
+  }
+}
+// worst aspect ratio in a row of areas laid along `side`
+function worst(row, sum, side) {
+  let mx = 0, mn = Infinity; for (const a of row) { if (a > mx) mx = a; if (a < mn) mn = a; }
+  const s2 = side * side, sum2 = sum * sum;
+  return Math.max(s2 * mx / sum2, sum2 / (s2 * mn));
+}
+
+// ---------- the city plan: kept between rebuilds so the city doesn't reshuffle as files appear ----------
+// Every directory keeps an undeveloped lot (LOT of its area). Files or directories that show up later are built on
+// their parent's lot (shelf packing: strips across the lot's shorter side), at the scale the parent was planned
+// with; only when a lot runs out (or the window, project or top directory changes) is the whole city re-planned.
+// Files that drop out of the window leave their plot empty.
+const LOT = 0.15;  // every directory, used or not, keeps this share free
+let plan = null;  // {key, top, rects: Map (fileKey | dirPath) -> {x, z, w, d, depth, dir}, lots: Map dirPath -> lot}
+function planDir(dir, x, z, w, d, depth) {
+  plan.rects.set(dir.path, { x, z, w, d, depth, dir: true });
+  const pad = Math.min(2, Math.min(w, d) * 0.06), ix = x + pad, iz = z + pad, iw = w - 2 * pad, id = d - 2 * pad;
+  const items = [...[...dir.dirs.values()].map(c => ({ value: c.value, dir: c })), ...dir.files.map(f => ({ value: f.value, file: f }))].filter(i => i.value > 0);
+  const lotV = Math.max(dir.value * LOT / (1 - LOT), 1e-9);
+  items.push({ value: lotV, lot: true });
+  items.sort((a, b) => b.value - a.value);
+  squarify(items, ix, iz, iw, id);
+  const scale = iw * id / items.reduce((s, i) => s + i.value, 0);  // area per unit of value inside this directory
+  for (const it of items) {
+    if (!it.rect) continue;
+    const [rx, rz, rw, rd] = it.rect;
+    if (it.lot) plan.lots.set(dir.path, { x: rx, z: rz, w: rw, d: rd, depth: depth + 1, scale, used: 0, shelf: null });
+    else if (it.dir) planDir(it.dir, rx, rz, rw, rd, depth + 1);
+    else plan.rects.set(it.file.key, { x: rx, z: rz, w: rw, d: rd, depth: depth + 1, dir: false });
+  }
+}
+// carve `area` out of a lot: strips (shelves) run across the lot's shorter side, items fill a strip before a new one starts
+function carve(lot, area) {
+  const across = Math.min(lot.w, lot.d), along = Math.max(lot.w, lot.d), wide = lot.w >= lot.d;
+  if (area <= 0 || area > across * along) return null;
+  let sh = lot.shelf;
+  if (!sh || sh.used + area / sh.t > across + 1e-6) {
+    const t = Math.min(along - lot.used, Math.max(Math.sqrt(area), area / across));
+    if (t <= 0 || area / t > across + 1e-6 || lot.used + t > along + 1e-6) return null;
+    sh = lot.shelf = { v: lot.used, t, used: 0 }; lot.used += t;
+  }
+  const len = area / sh.t, u = sh.used; sh.used += len;
+  // u runs across, v along: a wide lot stacks its strips along x
+  return wide ? { x: lot.x + sh.v, z: lot.z + u, w: sh.t, d: len } : { x: lot.x + u, z: lot.z + sh.v, w: len, d: sh.t };
+}
+function planGrow(dir) {
+  const lot = plan.lots.get(dir.path);
+  for (const c of [...dir.dirs.values(), ...dir.files]) {
+    const key = c.dirs ? c.path : c.key;
+    if (plan.rects.has(key)) continue;
+    const r = lot && carve(lot, c.value * lot.scale);
+    if (!r) return false;
+    if (c.dirs) planDir(c, r.x, r.z, r.w, r.d, lot.depth); else plan.rects.set(key, { ...r, depth: lot.depth, dir: false });
+  }
+  for (const c of dir.dirs.values()) if (plan.rects.get(c.path)?.dir && !planGrow(c)) return false;
+  return true;
+}
+let forceReplan = false;
+function planCity(top, key) {
+  const fresh = () => { plan = { key, top: top.path, rects: new Map(), lots: new Map(), n: (plan?.n || 0) + 1 }; planDir(top, -CW / 2, -CD / 2, CW, CD, 0); };
+  if (!plan || forceReplan || plan.key !== key || plan.top !== top.path) { forceReplan = false; fresh(); return "planned"; }
+  if (!planGrow(top)) { fresh(); return "re-planned (a lot ran out)"; }
+  return "kept";
+}
+
+// ---------- scene ----------
+const stage = $("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+stage.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 6000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = false;  // damping would need a frame every tick; we render only on change
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8890a0, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(-160, 320, 220); scene.add(sun);
+let world = new THREE.Group(); scene.add(world);
+const qp = new URLSearchParams(location.search), qn = (k, d) => qp.get(k) != null ? Number(qp.get(k)) : d;
+// from the front right and above: the city below, the agents' columns rising out of it into the past
+const VIEW_HOME = { pos: new THREE.Vector3(qn("cx", 330), qn("cy", 290), qn("cz", 440)), target: new THREE.Vector3(0, qn("ty", 125), 0) };
+let pending = false, genLabels = 0, userMoved = false, rootDepth = 0;  // rootDepth: how far the shown roots reach below y = 0
+function requestRender() { if (pending || document.hidden) return; pending = true; requestAnimationFrame(draw); }
+function draw() { pending = false; if (fp) return; try { nearDetail(); } catch (e) { showErr("close-up: " + (e.message || e), e); } renderer.render(scene, camera); try { placeLabels(); } catch (e) { showErr("labels: " + (e.message || e), e); } }
+// narrow screens step back so the whole scene stays in frame
+// framed on the whole scene: city at y = 0 up to the window start at YP + TL (the gap slider moves YP)
+function home() {
+  // the scene spans from the deepest root (-rootDepth) up to the window start (YP + TL)
+  // and across from the graph's left edge to the panel's right edge
+  const span = YP + TL + rootDepth, x0 = Math.min(planeAt.west() - 20, CXw(-CW / 2)), x1 = Math.max(planeAt.east() + 20, CXw(CW / 2));
+  const back = Math.max(1, 1.45 / Math.max(0.3, camera.aspect), (x1 - x0) / (CW * 1.5)) * span / (62 + TL);
+  VIEW_HOME.target.y = qn("ty", -rootDepth + span * 0.42); VIEW_HOME.target.x = qn("tx", (x0 + x1) / 2 - 20);
+  camera.position.copy(VIEW_HOME.pos).sub(new THREE.Vector3(0, 125, 0)).multiplyScalar(back).add(VIEW_HOME.target);
+  controls.target.copy(VIEW_HOME.target); controls.update(); userMoved = false; requestRender();
+}
+controls.addEventListener("start", () => { userMoved = true; if (focusPlane) { focusPlane = null; applyFocus(); } });
+controls.addEventListener("change", requestRender);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) requestRender(); });
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+  if (!userMoved) home(); else requestRender();
+}
+new ResizeObserver(resize).observe(stage);
+
+// pickables carry userData.info(i) -> tooltip html and optionally userData.click(i)
+let pickables = [], labels = [], buildingIndex = new Map(), buildingMesh = null, markers = null;
+const box = new THREE.BoxGeometry(1, 1, 1);
+const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpP = new THREE.Vector3();
+function instanced(n, material) {
+  const mesh = new THREE.InstancedMesh(box, material, Math.max(1, n));
+  mesh.count = n; mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  return mesh;
+}
+function setBox(mesh, i, x, y, z, sx, sy, sz, color) {
+  tmpP.set(x, y, z); tmpS.set(Math.max(sx, 1e-3), Math.max(sy, 1e-3), Math.max(sz, 1e-3));
+  mesh.setMatrixAt(i, tmpM.compose(tmpP, tmpQ, tmpS)); if (color) mesh.setColorAt(i, color);
+}
+// many segments in one LineSegments: pts = [x1,y1,z1,x2,y2,z2, ...], cols = per-vertex rgb
+function segments(pts, cols, opacity) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(cols, 3));
+  return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, depthWrite: false }));
+}
+function disposeWorld() {
+  world.traverse(o => { if (o.geometry && o.geometry !== box) o.geometry.dispose(); if (o.material) [].concat(o.material).forEach(m => { m.map?.dispose(); m.dispose(); }); o.isInstancedMesh && o.dispose(); });
+  scene.remove(world); world = new THREE.Group(); scene.add(world);
+}
+
+// Process samples load separately from the main event stream. Resolve them against the same ownership
+// history so old samples follow a rename while a later session reusing that spelling keeps its own samples.
+function namedProcs(history, samples) {
+  const nameAt = eventNames([...history, ...samples].sort((a, b) => a.ts - b.ts));
+  return samples.map(e => ({ ...e,
+    agents: processAgents(e, nameAt),
+    started: (e.started || []).map(p => ({ ...p, agent: nameAt(e, p.agent) })),
+    ended: (e.ended || []).map(p => ({ ...p, agent: nameAt(e, p.agent) })),
+  }));
+}
+
+// ---------- side-plane data: per-agent process samples (procs events), git commits, the machine (horatio) ----------
+// Each source degrades on its own: failures are noted, never fatal.
+const X3 = { procs: [], procsFrom: Infinity, procsNext: 0, procsGen: 0, procsNote: "", git: new Map(), gitNote: "", hor: null, horNote: "", horOff: false };
+// byte offset of the first event at or after time t: binary search on the log (the server resyncs to a line start)
+async function offsetAt(t) {
+  let lo = 0, hi = next;
+  while (hi - lo > 65536) {
+    const mid = Math.floor((lo + hi) / 2), r = await api(`/events?since=${mid}&limit=1&generation=${encodeURIComponent(eventGeneration)}`);
+    if (r.events.length && r.events[0].ts < t) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+async function loadProcs(w0) {
+  // procs events are bulky (a sample every 15 s): only the visible window's, then increments on live reloads
+  const gen = ++X3.procsGen;
+  let samples = [...X3.procs], cursor = X3.procsNext, from = X3.procsFrom;
+  try {
+    if (w0 < from) { samples = []; cursor = await offsetAt(w0 - 60); from = w0; }
+    for (;;) {
+      if (gen !== X3.procsGen) return;
+      const r = await api(`/events?since=${cursor}&type=procs&limit=20000&generation=${encodeURIComponent(eventGeneration)}`);
+      if (gen !== X3.procsGen) return;
+      samples.push(...r.events); const moved = r.next !== cursor; cursor = r.next;
+      if (r.events.length < 20000 || !moved) break;
+    }
+    // keep only the window's samples: live reloads append forever otherwise
+    if (samples.length && samples[0].ts < w0 - 60) { samples = samples.filter(e => e.ts >= w0 - 60); from = Math.max(from, w0); }
+    X3.procs = samples; X3.procsNext = cursor; X3.procsFrom = from;
+    X3.procsNote = samples.length ? "" : "no process samples in this window";
+  } catch (e) {
+    if (gen !== X3.procsGen) return;
+    X3.procsNote = "process samples: " + (e.message || e); console.warn(e);
+  }
+}
+async function loadGit(w0, w1) {
+  const key = `${w0 - w0 % 300}|${projSel()}`;
+  if (key === X3.gitRequest?.key && nowS() - X3.gitRequest.at < 120) return X3.gitRequest.promise;
+  const request = X3.gitRequest = { key, at: nowS() };
+  // Rebuilds for the same range share the wait; older ranges never publish into its cache.
+  request.promise = (async () => {
+    // repos: the working dirs of tool calls in the window and of agents on the bus (only local ones answer)
+    const cwds = new Map();
+    // the server only answers for dirs at or under a local agent's working dir: ask for nothing else
+    const roots = agentsNow.filter(a => a.cwd && a.local).map(a => a.cwd), served = d => roots.some(r => under(d, r));
+    for (const L of M.lanes.values()) for (const e of L.tools) if (e.ts >= w0 && e.cwd && served(e.cwd)) cwds.set(e.cwd, (cwds.get(e.cwd) || 0) + 1);
+    for (const r of roots) cwds.set(r, (cwds.get(r) || 0) + 1000);
+    const git = new Map(), fails = [];
+    for (const cwd of [...cwds].sort((a, b) => b[1] - a[1]).map(c => c[0]).slice(0, 10)) {
+      // Git resolves each cwd: a directory inside another repo may be a separate nested repo or submodule.
+      try { const r = await api(`/git?cwd=${encodeURIComponent(cwd)}&since=${Math.floor(w0)}&limit=500`); git.set(r.repo, r.commits); }
+      catch (e) { fails.push(`${cwd}: ${e.message || e}`); }
+    }
+    if (X3.gitRequest !== request) return;
+    X3.git = git;
+    X3.gitNote = fails.length ? `git: ${fails.length} dirs without history: hover for why` : "";
+    X3.gitFails = fails;
+  })();
+  return request.promise;
+}
+// the bus machine's core count and memory (GET /machine), else the arrange field / defaults; a failure is retried next rebuild
+async function loadMachine() {
+  if (X3.machine) return;
+  try { X3.machine = await api("/machine"); $("cores").placeholder = `${X3.machine.cores} (from the bus)`; }
+  catch (e) { $("cores").placeholder = "16 (bus doesn't say)"; console.warn("GET /machine failed", e); }
+}
+async function loadHoratio(w0, w1) {
+  const hours = Math.min(8760, Math.ceil((w1 - w0) / 3600 * 10) / 10 + 0.1), key = String(hours);
+  if (X3.horOff) return;  // a 404: horatio is off on this bus: don't ask again
+  if (key === X3.horRequest?.key && nowS() - X3.horRequest.at < 300) return X3.horRequest.promise;
+  const request = X3.horRequest = { key, at: nowS() };
+  request.promise = (async () => {
+    let hor = null, note, off = false;
+    try {
+      const r = await api(`/horatio/history?hours=${hours}`);
+      hor = (r.records || []).map(rec => ({ ts: Date.parse(rec.timestamp) / 1000, cpu: rec.cpu?.avg, cpuMin: rec.cpu?.min, cpuMax: rec.cpu?.max, mem: rec.memory?.percent,
+        memGb: rec.memory?.used_gb, memTot: rec.memory?.total_gb, gpus: rec.gpus,
+        gpu: rec.gpus?.length ? Math.max(...rec.gpus.map(g => g.util_percent ?? 0)) : null, gmem: rec.gpus?.length ? Math.max(...rec.gpus.map(g => g.mem_percent ?? 0)) : null }))
+        .filter(r => isFinite(r.ts)).sort((a, b) => a.ts - b.ts);
+      note = hor.length ? "" : "horatio: no history records";
+    } catch (e) { off = e.status === 404; note = off ? `machine history is off on this bus: ${e.message}` : `horatio unreachable: ${e.message || e}`; }
+    if (X3.horRequest !== request) return;
+    X3.hor = hor; X3.horNote = note; X3.horOff = off;
+  })();
+  return request.promise;
+}
+// ---------- the three side planes around the agents' cube (x: west -> east, z: north -> south, the default camera looks from the south) ----------
+// south (+z): the machine (horatio), west (-x): the agents' processes, east (+x): git commits per repo. Time runs up y, as in the columns.
+const cubeBox = () => ({ x0: toX(0) - 4, x1: toX(LW) + 4, z0: toZ(0) - 4, z1: toZ(LH) + 4 });
+// a preset facing one plane hides the other two (and their labels) until the camera is moved by hand or reset
+let focusPlane = null;
+function applyFocus() {
+  for (const o of world.children) if (o.userData.plane) o.visible = (!focusPlane || o.userData.plane === focusPlane) && (o.name !== "git" || $("tgit").checked);
+  requestRender();
+}
+const gapAll = () => Number($("gap").value);
+const planeAt = { south: () => cubeBox().z1 + 30 + gapAll() + ARR.os, west: () => cubeBox().x0 - 30 - gapAll() - ARR.ow, east: () => cubeBox().x1 + 30 + gapAll() + ARR.oe };
+let planeSpan = { south: [0, 1], west: [0, 1], east: [0, 1] };  // each plane's extent along its own horizontal axis (for the presets)
+// samples -> [{s, y, h}]: each sample drawn from its time up to the next one's (or a typical step), so the ribbon is continuous
+function spans(list, Y, cap) {
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i].ts, nx = i + 1 < list.length && list[i + 1].ts - t <= cap ? list[i + 1].ts : t + Math.min(cap, 15);
+    const ya = Y(t), yb = Y(nx); out.push({ s: list[i], y: (ya + yb) / 2, h: Math.max(0.12, Math.abs(ya - yb)) });
+  }
+  return out;
+}
+function drawPanel(w0, w1, Y, P, buildingAt) {
+  const notes = [], B = cubeBox(), ink = tcolor("var(--line-strong)");
+  const frame = [], fcols = [], fpush = (...v) => { frame.push(...v); fcols.push(ink.r, ink.g, ink.b, ink.r, ink.g, ink.b); };
+  const cap = (v, html) => labels.push({ v, html: `<span class="cap">${html}</span>`, anchor: "c", pri: 9e8, stack: true });
+  // faint backplates behind each lane, so a lane's full width (100%) reads even when usage is low
+  const backs = [], back = (x, z, sx, sz, color) => backs.push({ x, z, sx, sz, color });
+  // each plane's objects and labels carry userData.plane / .plane, so a preset facing one plane can hide the others
+  let mark = [world.children.length, labels.length];
+  const endPlane = name => {
+    if (frame.length) world.add(segments(frame.splice(0), fcols.splice(0), 0.8));
+    const bm = instanced(backs.length, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.025, depthWrite: false }));  // only the machine's lanes, barely there
+    backs.forEach((b, i) => setBox(bm, i, b.x, YP + TL / 2, b.z, b.sx, TL, b.sz, b.color)); backs.length = 0;
+    world.add(bm);
+    world.children.slice(mark[0]).forEach(o => { o.userData.plane = name; });
+    labels.slice(mark[1]).forEach(l => { l.plane = name; });
+    mark = [world.children.length, labels.length];
+  };
+  const tick = (v, html, color) => labels.push({ v, html: `<span class="tick"${color ? ` style="color:${esc(color)}"` : ""}>${html}</span>`, anchor: "below", pri: 4e8, tidy: true });
+
+  // ----- process samples in the window, per agent: totals and per-process series (top lists), plus lifetimes -----
+  const byAgent = new Map(), life = new Map();
+  for (const e of namedProcs(raw, X3.procs)) {
+    for (const s of e.started || []) life.set(s.pid + "@" + s.agent, { ...s, end: null });
+    for (const s of e.ended || []) { const o = life.get(s.pid + "@" + s.agent); if (o) o.end = e.ts; }
+    if (e.ts < w0 - 60 || e.ts > w1) continue;
+    for (const [name, a] of Object.entries(e.agents || {})) { if (!P.has(name)) continue;
+      let g = byAgent.get(name); if (!g) byAgent.set(name, g = { tot: [], procs: new Map() });
+      g.tot.push({ ts: e.ts, a });
+      for (const t of a.top || []) { let p = g.procs.get(t.pid); if (!p) g.procs.set(t.pid, p = { pid: t.pid, cmd: t.cmd, list: [] }); p.list.push({ ts: e.ts, t }); } }
+  }
+  for (const [n, g] of byAgent) for (const p of g.procs.values()) p.life = life.get(p.pid + "@" + n) || null;
+
+  // ----- south: the machine plane, and in front of it (toward the agents) one plane per busy process -----
+  // Every plane shares the machine's lanes and scale: a process's cpu column sits right behind the machine's cpu column, at the
+  // same time, as a share of the whole machine (cpu / cores, memory / total memory), so they line up.
+  {
+    const mets = [["cpu", "cpu %", "var(--accent)"], ["mem", "memory %", "var(--idle)"], ["gpu", "gpu util %", "var(--warn)"], ["gmem", "gpu memory %", "var(--human)"]];
+    const lw = (B.x1 - B.x0) / mets.length - 4, side = Math.min(lw, 24), laneX = i => B.x0 + i * (lw + 4) + lw / 2, ground = tcolor("var(--ground)");
+    const cores = Math.max(1, Number($("cores").value) || X3.machine?.cores || 16);
+    const memTot = (X3.hor?.length && X3.hor[X3.hor.length - 1].memTot) || (X3.machine?.mem_total_mb ? X3.machine.mem_total_mb / 1024 : 64);
+    // the processes that get a plane: the busiest NPROC by cpu-seconds in the window; the rest of each agent's load is "other"
+    const NPROC = 10, DZ = 9, ranked = [];
+    for (const [n, g] of byAgent) for (const p of g.procs.values()) { let cs = 0; for (let i = 0; i < p.list.length; i++) cs += (p.list[i].t.cpu || 0) * Math.min(60, (p.list[i + 1]?.ts ?? p.list[i].ts + 15) - p.list[i].ts); if (p.list.length) ranked.push({ n, p, cs }); }
+    ranked.sort((a, b) => b.cs - a.cs);
+    const shown = ranked.slice(0, NPROC).sort((a, b) => a.n < b.n ? -1 : a.n > b.n ? 1 : b.cs - a.cs), shownPid = new Set(shown.map(s => s.n + "@" + s.p.pid));
+    const other = [];  // per sample time: every agent's total minus its shown processes
+    if (ranked.length > shown.length) {
+      const at = new Map();
+      for (const [n, g] of byAgent) for (const s of g.tot) { const o = at.get(s.ts) || { ts: s.ts, cpu: 0, rss: 0 }; o.cpu += s.a.cpu || 0; o.rss += s.a.rss_mb || 0;
+        for (const t of s.a.top || []) if (shownPid.has(n + "@" + t.pid)) { o.cpu -= t.cpu || 0; o.rss -= t.rss_mb || 0; } at.set(s.ts, o); }
+      other.push(...[...at.values()].sort((a, b) => a.ts - b.ts));
+    }
+    const planesN = shown.length + (other.length ? 1 : 0);
+    // the machine plane is nearest the agents; process planes layer outward (south) behind it, "other" outermost
+    const zS = planeAt.south(), zOfK = k => zS + side + 4 + k * DZ;
+    planeSpan.south = [B.x0, B.x1];
+    mets.forEach(([, label], i) => { const x = B.x0 + i * (lw + 4); fpush(x, YP, zS, x, YP + TL, zS); fpush(x, YP, zS, x + lw, YP, zS);
+      back(x + lw / 2, zS - 0.2, lw, 0.1, tcolor(mets[i][2]));
+      tick(new THREE.Vector3(x + lw / 2, YP - 2, zS), `${label} <span class="m">(0–100)</span>`); });
+    cap(new THREE.Vector3((B.x0 + B.x1) / 2, YP + TL + 5, zS), `machine (horatio)${planesN ? ` · ${planesN} process planes behind it` : ""}`);
+    const items = [], colors = mets.map(m => tcolor(m[2]));
+    if (X3.hor?.length) {
+      for (const sp of spans(X3.hor.filter(r => r.ts >= w0 - 30 && r.ts <= w1), Y, 120)) mets.forEach(([k], i) => { const v = sp.s[k];
+        if (v != null && isFinite(v)) items.push({ kind: "machine", sp, i, v: Math.max(0, Math.min(100, v)), z: zS + side / 2 + 0.5, c: colors[i].clone().lerp(ground, 0.15) }); });
+    } else if (X3.horNote) notes.push(X3.horNote);
+    // process planes: a faint backplate over the cpu and memory lanes, a label, the columns, the lifetime as a thin line
+    const strokes = [], scols = [], sinfo = [];
+    const procPlane = (k, name, label, list, c, extra) => {
+      const z = zOfK(k);
+      fpush(laneX(0) - lw / 2, YP, z, laneX(1) + lw / 2, YP, z);  // a thin base line marks the plane
+      labels.push({ v: new THREE.Vector3(B.x0 - 1, YP, z), html: `<span class="tick" style="color:${esc("#" + c.getHexString())}">${label}</span>`, anchor: "r", pri: 2e8 + (planesN - k), tidy: true });
+      for (const sp of spans(list, Y, 60)) {
+        const v = [Math.min(100, sp.s.cpu / cores), Math.min(100, sp.s.rss / 1024 / memTot * 100)];
+        v.forEach((x, i) => items.push({ kind: "proc", sp, i, v: x, z, c: i ? c.clone().lerp(ground, 0.45) : c, name, extra }));
+      }
+    };
+    shown.forEach(({ n, p }, k) => {
+      const c = tcolor(colorOf(n)), list = p.list.map(s => ({ ts: s.ts, cpu: s.t.cpu || 0, rss: s.t.rss_mb || 0 }));
+      procPlane(k, n, `${esc(n)} · ${esc(String(p.cmd || "").split(/\s+/).slice(0, 3).join(" ").slice(0, 40))}`, list, c, p);
+      const a = p.life?.start ?? p.list[0].ts, b = p.life?.end ?? (p.life ? w1 : p.list[p.list.length - 1].ts), z = zOfK(k);
+      strokes.push(laneX(0), Y(Math.max(w0, a)), z, laneX(0), Y(Math.min(w1, b)), z); scols.push(c.r, c.g, c.b, c.r, c.g, c.b); sinfo.push({ n, p, a, b });
+    });
+    if (other.length) procPlane(shown.length, "other", `other processes (${ranked.length - shown.length})`, other, tcolor("var(--muted)"), null);
+    const mesh = instanced(items.length, new THREE.MeshLambertMaterial());
+    items.forEach((it, j) => { const a = Math.max(it.kind === "proc" ? 0.8 : 0.35, side * it.v / 100);
+      setBox(mesh, j, laneX(it.i), it.sp.y, it.z, a, it.sp.h, a, it.c); });
+    mesh.userData = { group: "panel", info: j => { const it = items[j], r = it.sp.s, when = `<span class="m">${dayOf(r.ts)} ${clock(r.ts, true)}</span>`;
+      if (it.kind === "proc") {
+        const head = it.extra ? `<b>${esc(it.name)}</b> pid ${it.extra.pid} ${when}\n${esc(String(it.extra.cmd || "").slice(0, 300))}` : `<b>other processes</b> ${when}\nall agents' processes without a plane of their own`;
+        return `${head}\ncpu ${Math.round(r.cpu)}% of a core = ${(r.cpu / cores).toFixed(1)}% of the machine (${cores} cores)\nmemory ${Math.round(r.rss)} MB = ${(r.rss / 1024 / memTot * 100).toFixed(1)}% of ${Math.round(memTot)} GB`;
+      }
+      return `<b>machine</b> ${when}\ncpu ${r.cpu ?? "?"}% (min ${r.cpuMin ?? "?"}, max ${r.cpuMax ?? "?"})\nmemory ${r.mem ?? "?"}%${r.memGb != null ? ` · ${r.memGb} of ${r.memTot} GB` : ""}\n`
+        + (r.gpus?.length ? r.gpus.map(g => `gpu ${g.index}: ${g.util_percent ?? "?"}% util · ${g.mem_used_gb ?? "?"} of ${g.mem_total_gb ?? "?"} GB`).join("\n") : "no gpu data"); } };
+    if (items.length) { world.add(mesh); pickables.push(mesh); }
+    if (strokes.length) { const ls = segments(strokes, scols, 0.6); ls.name = "procs";
+      ls.userData = { group: "panel", info: i => { const { n, p, a, b } = sinfo[i]; return `<b>${esc(n)}</b> pid ${p.pid} <span class="m">${clock(a, true)} – ${p.life && !p.life.end ? "running" : clock(b, true)} (${dur(b - a)})</span>\n${esc(String(p.cmd || "").slice(0, 300))}`; } };
+      world.add(ls); pickables.push(ls); }
+    if (!byAgent.size) notes.push(X3.procsNote || "no process samples in this window");
+  }
+
+  endPlane("south");
+  // ----- west: each agent's total load: two square columns per sample, cpu and memory (paler), side = value -----
+  {
+    const xW = planeAt.west(), names = [...byAgent.keys()].sort((a, b) => P.get(a).z - P.get(b).z), ground = tcolor("var(--ground)");
+    let maxCpu = 100, maxRss = 256;
+    for (const g of byAgent.values()) for (const s of g.tot) { maxCpu = Math.max(maxCpu, s.a.cpu || 0); maxRss = Math.max(maxRss, s.a.rss_mb || 0); }
+    const U = Math.min(16, (B.z1 - B.z0) / Math.max(1, names.length)), items = [];
+    names.forEach((n, i) => { const z = B.z0 + i * U, c = tcolor(colorOf(n));
+      for (const sp of spans(byAgent.get(n).tot, Y, 60)) items.push({ n, sp, z, c });
+      fpush(xW, YP, z, xW, YP + TL, z);
+      tick(new THREE.Vector3(xW, YP - 2, z + U / 2), esc(n), colorOf(n)); });
+    planeSpan.west = [B.z0, B.z1];
+    fpush(xW, YP, B.z0, xW, YP, B.z1);
+    cap(new THREE.Vector3(xW, YP + TL + 5, (B.z0 + B.z1) / 2), "each agent's total processes");
+    if (names.length) labels.push({ v: new THREE.Vector3(xW, YP + TL + 1, B.z0), html: `<span class="tick">two columns per agent: cpu, then memory (paler) · full width: ${Math.round(maxCpu)}% of a core, ${Math.round(maxRss)} MB</span>`, anchor: "l", pri: 3e8 });
+    const mesh = instanced(items.length * 2, new THREE.MeshLambertMaterial());
+    items.forEach((it, j) => { const h = U / 2 * 0.9, xc = xW - h / 2 - 0.5, a = it.sp.s.a;
+      const ac = h * (0.15 + 0.85 * Math.min(1, (a.cpu || 0) / maxCpu)), am = h * (0.15 + 0.85 * Math.min(1, (a.rss_mb || 0) / maxRss));
+      setBox(mesh, 2 * j, xc, it.sp.y, it.z + U * 0.25, ac, it.sp.h, ac, it.c);
+      setBox(mesh, 2 * j + 1, xc, it.sp.y, it.z + U * 0.75, am, it.sp.h, am, it.c.clone().lerp(ground, 0.5)); });
+    mesh.userData = { group: "panel", info: j => { const it = items[j >> 1], a = it.sp.s.a, ts = it.sp.s.ts;
+      return `<b>${esc(it.n)}</b> all processes <span class="m">${dayOf(ts)} ${clock(ts, true)}</span>\ncpu ${Math.round(a.cpu || 0)}% of a core · ${Math.round(a.rss_mb || 0)} MB · ${a.n ?? "?"} processes\n${(a.top || []).map(t => `${esc(String(t.cmd || "").slice(0, 80))}  ${Math.round(t.cpu)}% ${Math.round(t.rss_mb)} MB`).join("\n")}`; } };
+    if (items.length) { world.add(mesh); pickables.push(mesh); }
+  }
+
+  endPlane("west");
+  // ----- east: git commits, a lane per repo; depth out of the plane = lines changed; lines to files and the committer (toggle) -----
+  {
+    const xE = planeAt.east(), repos = [...X3.git.keys()].sort(), commits = [];
+    for (const [repo, cs] of X3.git) for (const c of cs) if (c.ts >= w0 && c.ts <= w1) commits.push({ ...c, repo });
+    const lane = repos.length ? Math.min(40, (B.z1 - B.z0) / repos.length) : 40;
+    const zOf = r => B.z1 - (repos.indexOf(r) + 0.5) * lane;  // seen from the east, the first repo is on the left (south)
+    planeSpan.east = [B.z0, B.z1];
+    repos.forEach(r => { const z = zOf(r); fpush(xE, YP, z, xE, YP + TL, z); tick(new THREE.Vector3(xE, YP - 2, z), esc(r.split("/").slice(-2).join("/"))); });
+    fpush(xE, YP, B.z0, xE, YP, B.z1);
+    cap(new THREE.Vector3(xE, YP + TL + 12, B.z0 + (B.z1 - B.z0) * 0.75), "git commits per repo");
+    if (commits.length) {
+      const gitCalls = [];
+      for (const L of M.lanes.values()) for (const e of L.tools) if (isLocalFile(e, agentsNow) && /\bgit\b[^|;&]*\bcommit\b/.test(e.target) && e.ts >= w0 - 120) gitCalls.push(e);
+      const mesh = instanced(commits.length, new THREE.MeshLambertMaterial()), pts = [], cols = [], segInfo = [];
+      commits.forEach((c, j) => {
+        const by = gitCalls.filter(e => (!e.cwd || under(e.cwd, c.repo) || under(c.repo, e.cwd)) && e.ts <= c.ts + 5 && e.ts >= c.ts - 90).sort((a, b) => b.ts - a.ts)[0];
+        c.agent = by?.agent || ""; const y = Y(c.ts), col = c.agent ? tcolor(colorOf(c.agent)) : tcolor("var(--ink)"), z = zOf(c.repo);
+        const churn = c.files.reduce((s, f) => s + (f.add || 0) + (f.del || 0), 0), dep = 1.5 + 2.2 * Math.log1p(churn);
+        setBox(mesh, j, xE + dep / 2, y, z, dep, 1.2, Math.min(12, lane * 0.6), col);
+        for (const f of c.files) { const b = buildingAt(c.repo, f.path); if (!b) continue; pts.push(xE, y, z, b.cx, b.top, b.cz); cols.push(col.r, col.g, col.b, col.r, col.g, col.b); segInfo.push({ c, f }); }
+        const a = c.agent && P.get(c.agent); if (a) { pts.push(xE, y, z, a.x, y, a.z); cols.push(col.r, col.g, col.b, col.r, col.g, col.b); segInfo.push({ c, f: null }); }
+      });
+      mesh.userData = { group: "panel", info: j => { const c = commits[j]; return `<b>${esc(c.subject)}</b>\n<span class="m">${esc(c.hash.slice(0, 9))} · ${dayOf(c.ts)} ${clock(c.ts, true)} · ${esc(c.repo)}</span>\n${c.agent ? `by ${esc(c.agent)} (its git commit call)` : `author ${esc(c.author)} (no agent's git commit call matched)`}\n${c.files.slice(0, 12).map(f => `${esc(f.path)} +${f.add ?? "?"} -${f.del ?? "?"}`).join("\n")}${c.files.length > 12 ? `\n… ${c.files.length - 12} more` : ""}`; } };
+      world.add(mesh); pickables.push(mesh);
+      const ls = segments(pts, cols, 0.16); ls.name = "git"; ls.visible = $("tgit").checked;
+      ls.userData = { info: i => { const { c, f } = segInfo[i]; return `<b>${esc(c.subject)}</b> <span class="m">${clock(c.ts)}</span>\n${f ? esc(f.path) + ` +${f.add ?? "?"} -${f.del ?? "?"}` : "committed by " + esc(c.agent)}`; } };
+      if (pts.length) { world.add(ls); pickables.push(ls); }
+    } else notes.push(X3.gitNote || "no commits in this window");
+  }
+  endPlane("east");
+  applyFocus();
+  $("panelnote").textContent = notes.length ? "planes: " + notes.map(n => n.replace(/: .*/, "")).join(" · ") : "";
+  $("panelnote").title = [...notes, ...(X3.gitFails || [])].join("\n");
+}
+
+let S = null;  // the current scene's data, for re-filtering lines and dragging without a full rebuild
+const recentS = () => RECENT[Number($("recent").value)] || 0;
+
+let rebuildGen = 0;
+async function rebuild(opts = {}) {
+  if (!M) return;
+  for (const b of $("ranges").children) b.setAttribute("aria-pressed", String(Number(b.dataset.r) === range));
+  TL = ARR.tl;
+  const ypWas = YP; YP = Math.max(HMAX * ARR.ch + 4, 62 + HMAX * (ARR.ch - 1) + gapAll() + ARR.oc); dragPlane.constant = -YP;
+  if (YP !== ypWas && !userMoved) home();
+  const [w0, w1] = winNow(), Y = t => YP + (w1 - t) / (w1 - w0) * TL, rec = recentS(), cut = rec ? Math.max(w0, w1 - rec) : w0;
+  $("recentv").textContent = RECENT_LABEL[Number($("recent").value)] || "whole window";
+  const ground = tcolor("var(--ground)"), lineC = tcolor("var(--line-strong)"), accent = tcolor("var(--accent)");
+  scene.background = ground;
+
+  // ----- files touched in the window, the directory tree, the city plan -----
+  const files = new Map();
+  for (const t of M.touches) {
+    if (t.ts < w0 || t.ts > w1 || junkPath(t.path) || (cityRoot && !under(t.path, cityRoot))) continue;
+    const L = M.lanes.get(t.agent); if (L && !inProj(L)) continue;
+    let f = files.get(t.key);
+    if (!f) files.set(t.key, f = { key: t.key, host: t.host, path: t.path, edits: 0, reads: 0, redits: 0, rreads: 0, by: new Map(), last: 0 });
+    t.write ? f.edits++ : f.reads++; f.last = Math.max(f.last, t.ts);
+    if (t.ts >= cut) t.write ? f.redits++ : f.rreads++;
+    const b = f.by.get(t.agent) || { e: 0, r: 0, re: 0, rr: 0 }; t.write ? b.e++ : b.r++; if (t.ts >= cut) t.write ? b.re++ : b.rr++; f.by.set(t.agent, b);
+  }
+  // everything that waits on the network happens here, before the scene is touched; a newer rebuild started meanwhile wins
+  const gen = ++rebuildGen;
+  await Promise.all([fetchSizes([...files.values()]).catch(e => showErr("file sizes: " + (e.message || e), e)), loadProcs(w0), loadGit(w0, w1), loadHoratio(w0, w1), loadMachine()]);
+  if (gen !== rebuildGen) return;
+  const known = [...files.keys()].map(p => sizes.get(p)?.size).filter(v => v != null).sort((a, b) => a - b);
+  const median = known.length ? known[known.length >> 1] : 4096;
+  let nGuess = 0;
+  for (const f of files.values()) {
+    f.size = sizes.get(f.key)?.size ?? null;
+    // footprint ~ log(size): a 1 MB file isn't 1000 small ones wide
+    f.value = Math.max(0.5, Math.log1p(f.size ?? (nGuess++, median)));
+    f.score = f.redits * 3 + f.rreads;  // for ranking only; heights: edits up, reads down
+  }
+  const root = { name: "", path: "", dirs: new Map(), files: [] };
+  for (const f of files.values()) {
+    const segs = f.path.split("/").filter(Boolean); f.name = segs.pop();
+    let d = root;
+    for (const s of segs) { if (!d.dirs.has(s)) d.dirs.set(s, { name: s, path: d.path + "/" + s, dirs: new Map(), files: [] }); d = d.dirs.get(s); }
+    d.files.push(f);
+  }
+  // chains of single-child directories fold into one ("a/b/c"); the city starts at the deepest common directory
+  const fold = d => { for (const [k, c] of d.dirs) { let x = c; while (x.dirs.size === 1 && !x.files.length) { const only = [...x.dirs.values()][0]; x = { ...only, name: x.name + "/" + only.name }; } d.dirs.set(k, x); fold(x); } };
+  fold(root);
+  let top = root; while (top.dirs.size === 1 && !top.files.length) top = [...top.dirs.values()][0];
+  renderCrumbs(top.path);
+  const total = d => d.value = d.files.reduce((s, f) => s + f.value, 0) + [...d.dirs.values()].reduce((s, c) => s + total(c), 0);
+  total(top);
+  const planned = files.size ? planCity(top, `${range}|${projSel()}|${cityRoot}`) : "";
+  $("sizenote").innerHTML = !files.size ? "" : `footprint = log(file size)${nGuess ? ` <span class="note" title="files not on the bus's machine, outside the agents' working dirs, deleted, or relative to an unknown dir">· ${nGuess} of ${files.size} unknown, drawn at the median ${kb(median)}</span>` : ""}`
+    + ` <span class="sub" title="The city keeps its plan while files come and go; new files are built on their directory's empty lot. Re-planned when the window or project changes or a lot runs out.">· city ${planned}</span>`;
+
+  clearNear(); disposeWorld(); pickables = []; labels = [];
+  // ----- the city -----
+  const dirs = [], blds = [], lots = [];
+  // (in dirs.push, `dir: d` goes last: the plan rect has a boolean `dir` flag that must not overwrite the directory)
+  const walk = d => { const r = plan.rects.get(d.path); if (r) dirs.push({ ...r, dir: d }); const lot = plan.lots.get(d.path); if (lot) lots.push({ dir: d, lot }); d.dirs.forEach(walk);
+    for (const f of d.files) { const fr = plan.rects.get(f.key); if (fr) { const g = Math.min(fr.w, fr.d) * 0.12; blds.push({ f, x: CXw(fr.x + g / 2), z: CZw(fr.z + g / 2), w: (fr.w - g) * ARR.cs, d: (fr.d - g) * ARR.cs, base: fr.depth * SLAB }); } } };
+  if (files.size) walk(top);
+  const slabA = tcolor("var(--tint)"), slabB = tcolor("var(--line-strong)"), lotC = tcolor("var(--idle)").lerp(ground, 0.82);
+  const dirMesh = instanced(dirs.length + lots.length, new THREE.MeshLambertMaterial());
+  for (const r of dirs) { r.wx = CXw(r.x); r.wz = CZw(r.z); r.ww = r.w * ARR.cs; r.wd = r.d * ARR.cs; r.color = slabA.clone().lerp(slabB, Math.min(1, 0.25 + r.depth * 0.18)); }
+  dirs.forEach((r, i) => setBox(dirMesh, i, r.wx + r.ww / 2, r.depth * SLAB + SLAB / 2, r.wz + r.wd / 2, r.ww, SLAB, r.wd, r.color));
+  lots.forEach(({ lot }, i) => setBox(dirMesh, dirs.length + i, CXw(lot.x + lot.w / 2), lot.depth * SLAB + 0.06, CZw(lot.z + lot.d / 2), lot.w * ARR.cs * 0.96, 0.12, lot.d * ARR.cs * 0.96, lotC));
+  dirMesh.userData = { info: i => {
+    if (i >= dirs.length) { const { dir, lot } = lots[i - dirs.length], free = 1 - lot.used / Math.max(lot.w, lot.d); return `<b>empty lot</b> in ${esc(dir.path + "/")}\nfor files that show up later · ${Math.round(free * 100)}% still free`; }
+    const r = dirs[i]; let n = 0; const cnt = d => { n += d.files.length; d.dirs.forEach(cnt); }; cnt(r.dir);
+    return `<b>${esc((r.dir.path || "") + "/")}</b>\n${n} files touched\n<span class="m">double-click: orbit around here · shift-drag: move the city</span>`; } };
+  cityDirs = { mesh: dirMesh, dirs };
+  dirMesh.userData.group = "city";
+  if (dirs.length) { world.add(dirMesh); pickables.push(dirMesh); }
+  // directory labels, level of detail: one per plot, shown once the plot is big enough on screen (see placeLabels)
+  dirs.forEach((r, i) => { if (r.depth > 0 || dirs.length === 1) labels.push({ v: new THREE.Vector3(r.wx + 1, (r.depth + 1) * SLAB, r.wz + 1), v2: new THREE.Vector3(r.wx + r.ww, (r.depth + 1) * SLAB, r.wz + r.wd),
+    html: `<span class="dir" data-di="${i}" data-dpath="${esc(r.dir.path)}" title="${esc(r.dir.path)}: click to show only this directory">${esc(r.dir.name)}/</span>`, anchor: "l", pri: r.w * r.d / (1 + r.depth), tidy: true, minPx: 70 }); });
+  labels.push({ v: new THREE.Vector3(CXw(0), 0, CZw(CD / 2) + 8), html: `<span class="cap">files · ${esc(top.path || "/")}</span>`, anchor: "c", pri: 1e9 });
+  // edits build up from the plot, reads dig roots down below the ground (y = 0), on one shared scale so they compare
+  const maxCount = Math.max(1, ...[...files.values()].map(f => Math.max(f.redits, f.rreads)));
+  const lin = $("hscale").value === "linear";  // log (default) keeps the few hot files from flattening everything else
+  const hOf = n => n ? 0.6 + HMAX * ARR.ch * (lin ? n / maxCount : Math.log1p(n) / Math.log1p(maxCount)) : 0;
+  const rootsOn = $("roots").checked, roots = [];
+  buildingMesh = instanced(blds.length, new THREE.MeshLambertMaterial());
+  buildingIndex = new Map();
+  let rootMax = 0;
+  blds.forEach((b, i) => {
+    const f = b.f, h = Math.max(0.3, hOf(f.redits));  // no edits in the span: a bare foundation
+    b.down = hOf(f.rreads); if (b.down) { roots.push(b); rootMax = Math.max(rootMax, b.down); }
+    const rank = ([, c]) => (rec ? c.re * 3 + c.rr : c.e * 3 + c.r) || (c.e * 3 + c.r) / 1e3;
+    const owner = [...f.by].sort((a, c) => rank(c) - rank(a))[0][0];  // whoever edited it most; reads count a third
+    b.color = tcolor(colorOf(owner)).lerp(ground, !f.score ? 0.7 : f.redits ? 0 : 0.5);
+    b.h = h; b.top = b.base + h; b.cx = b.x + b.w / 2; b.cz = b.z + b.d / 2;
+    setBox(buildingMesh, i, b.cx, b.base + h / 2, b.cz, b.w, h, b.d, b.color);
+    buildingIndex.set(f.key, i);
+  });
+  // roots: a slightly narrower, paler box under the plate per file with reads
+  const rootMesh = instanced(roots.length, new THREE.MeshLambertMaterial());
+  roots.forEach((b, i) => setBox(rootMesh, i, b.cx, -b.down / 2, b.cz, b.w * 0.8, b.down, b.d * 0.8, b.color.clone().lerp(ground, 0.35)));
+  rootMesh.visible = rootsOn; rootMesh.userData.group = "city";
+  if (roots.length) { world.add(rootMesh); pickables.push(rootMesh); }
+  // the plots turn see-through while roots are shown, so the roots read from above too
+  dirMesh.material.transparent = rootsOn; dirMesh.material.opacity = rootsOn ? 0.55 : 1; dirMesh.material.depthWrite = !rootsOn;
+  const rdWas = rootDepth; rootDepth = rootsOn ? rootMax : 0;
+  if (rootDepth !== rdWas && !userMoved) home();
+  buildingMesh.userData = { info: i => { const f = blds[i].f;
+      return `<b>${esc(fileLabel(f))}</b>\n${f.edits} edits (up) · ${f.reads} reads (roots, down) in the window${rec ? ` (${f.redits} + ${f.rreads} in the last ${dur(rec)})` : ""} · ${f.size != null ? kb(f.size) : "size unknown"}\n`
+        + [...f.by].sort((a, b) => (b[1].e * 3 + b[1].r) - (a[1].e * 3 + a[1].r)).slice(0, 8).map(([n, c]) => `${esc(n)}: ${c.e} edits, ${c.r} reads`).join("\n")
+        + `\nlast ${dayOf(f.last)} ${clock(f.last)}\n<span class="m">click: details, and only its lines</span>`; },
+    click: i => { const key = blds[i].f.key; fileSel = fileSel === key ? "" : key; agentSel = ""; refilter(); if (fileSel) paneOpen("file", key); } };
+  buildingMesh.userData.group = "city";
+  rootMesh.userData.info = i => buildingMesh.userData.info(buildingIndex.get(roots[i].f.key));
+  rootMesh.userData.click = i => buildingMesh.userData.click(buildingIndex.get(roots[i].f.key));
+  if (blds.length) { world.add(buildingMesh); pickables.push(buildingMesh); }
+
+  // ----- the agent graph -----
+  const gd = graphData(w0, w1, $("tproj").checked, $("thuman").checked), nodes = layout3d(gd, opts.fresh);
+  const P = new Map(nodes.map(a => [a.name, { x: toX(a.px), z: toZ(a.py), pinned: a.pinned }]));
+  // columns through time: one box per (agent, time slice) with tool calls or busy time; wider = more tool calls, brighter = busier
+  const NB = 160, bw = (w1 - w0) / NB, binLen = TL / NB, traces = [];
+  let maxTools = 1;
+  for (const n of gd.names) {
+    const L = M.lanes.get(n); if (!L || n.startsWith("/")) continue;
+    const tools = new Array(NB).fill(0), busy = new Array(NB).fill(0);
+    for (const e of L.tools) if (e.ts >= w0 && e.ts <= w1) tools[Math.min(NB - 1, Math.floor((e.ts - w0) / bw))]++;
+    for (const [a, b] of busySpans(L, w0, w1, agentsNow, nowS())) for (let i = Math.floor((a - w0) / bw); i <= Math.min(NB - 1, Math.floor((b - w0) / bw)); i++) {
+      const lo = w0 + i * bw, hi = lo + bw; busy[i] += Math.max(0, Math.min(b, hi) - Math.max(a, lo)) / bw; }
+    for (let i = 0; i < NB; i++) if (tools[i] || busy[i] > 0.02) { traces.push({ name: n, bin: i, tools: tools[i], busy: Math.min(1, busy[i]) }); maxTools = Math.max(maxTools, tools[i]); }
+  }
+  const traceMesh = instanced(traces.length, new THREE.MeshLambertMaterial());
+  traces.forEach((t, i) => {
+    const p = P.get(t.name), wd = 1.3 + 5 * Math.sqrt(t.tools / maxTools), c = tcolor(colorOf(t.name)).lerp(ground, 0.55 * (1 - t.busy));
+    setBox(traceMesh, i, p.x, Y(w0 + (t.bin + 0.5) * bw), p.z, wd, binLen * 0.96, wd, c);
+  });
+  const pickAgent = n => { agentSel = agentSel === n ? "" : n; fileSel = ""; refilter(); if (agentSel && n !== "human" && !n.startsWith("/")) paneOpen("agent", n); };
+  traceMesh.userData = { info: i => { const t = traces[i], a = w0 + t.bin * bw;
+      return `<b>${esc(t.name)}</b> <span class="m">${clock(a)}–${clock(a + bw)}</span>\n${t.tools} tool calls · busy ${Math.round(t.busy * 100)}% of this slice\n<span class="m">click: details, and only its file lines</span>`; },
+    click: i => pickAgent(traces[i].name) };
+  traceMesh.userData.group = "graph";
+  if (traces.length) { world.add(traceMesh); pickables.push(traceMesh); }
+  // presence lines, the markers at the present end (drag them), name labels
+  {
+    const pts = [], cols = [];
+    for (const n of gd.names) {
+      const p = P.get(n), L = M.lanes.get(n), c = tcolor(colorOf(n));
+      pts.push(p.x, YP, p.z, p.x, L && isFinite(L.first) ? Y(Math.max(w0, L.first)) : YP + TL, p.z); cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      labels.push({ name: n, v: new THREE.Vector3(p.x, YP - 1.6, p.z), anchor: "below", pri: (gd.act.get(n) || 0) + 1e6 * (n === agentSel), tidy: true,
+        html: n.startsWith("/") ? `<a class="proj" style="--c:${esc(colorOf(n))}" href="${esc(projHref(n))}">${esc(n)}</a>`
+          : n === "human" ? `<span class="h" style="color:var(--human)">human</span>` : `<a style="--c:${esc(colorOf(n))}" href="${esc(agentHref(n))}">${esc(n)}</a>` });
+    }
+    world.add(segments(pts, cols, 0.45));
+    const maxAct = Math.max(1, ...gd.act.values());
+    markers = instanced(gd.names.length, new THREE.MeshLambertMaterial());
+    gd.names.forEach((n, i) => { const p = P.get(n), s = n.startsWith("/") ? 4.5 : 5.5 + 4 * Math.sqrt((gd.act.get(n) || 0) / maxAct);  // wider than the column, so it can be grabbed
+      setBox(markers, i, p.x, YP - 0.8, p.z, s, 1.6, s, tcolor(colorOf(n))); });
+    markers.userData = { names: gd.names, info: i => { const n = gd.names[i];
+        return `<b>${esc(n)}</b> <span class="m">${P.get(n).pinned ? "pinned" : "free"}</span>\n${gd.act.get(n) || 0} tool calls + messages in the window\n<span class="m">click: details · drag: move and pin · right-click: ${P.get(n).pinned ? "free" : "pin"}</span>`; },
+      click: i => { const n = gd.names[i]; if (n.startsWith("/")) location.href = projHref(n); else pickAgent(n); } };
+    markers.userData.group = "graph";
+    world.add(markers); pickables.push(markers);
+    // pins: a small ring of a different color above the marker
+    const pinned = gd.names.filter(n => P.get(n).pinned), pinMesh = instanced(pinned.length, new THREE.MeshLambertMaterial({ color: tcolor("var(--ink)") }));
+    pinned.forEach((n, i) => { const p = P.get(n); setBox(pinMesh, i, p.x, YP - 2.2, p.z, 1.4, 1.4, 1.4); });
+    if (pinned.length) world.add(pinMesh);
+  }
+  // the time volume: outlines at the present and at the window start, corner edges, ticks up one corner
+  {
+    const pts = [], cols = [], push = (c, ...v) => { pts.push(...v); cols.push(c.r, c.g, c.b, c.r, c.g, c.b); };
+    const x0 = toX(0) - 4, x1 = toX(LW) + 4, z0 = toZ(0) - 4, z1 = toZ(LH) + 4;
+    const rect = (y, c) => { push(c, x0, y, z0, x1, y, z0); push(c, x1, y, z0, x1, y, z1); push(c, x1, y, z1, x0, y, z1); push(c, x0, y, z1, x0, y, z0); };
+    rect(YP, lineC); rect(YP + TL, lineC);
+    for (const [x, z] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) push(lineC, x, YP, z, x, YP + TL, z);
+    if (rec && cut > w0) rect(Y(cut), accent);
+    const step = STEPS.find(s => (w1 - w0) / s <= 8) || 172800, off = new Date().getTimezoneOffset() * 60;
+    for (let t = Math.ceil((w0 - off) / step) * step + off; t <= w1; t += step) {
+      push(lineC, x0, Y(t), z1, x0 + 6, Y(t), z1); push(lineC, x0, Y(t), z1, x0, Y(t), z1 - 6);
+      const mid = new Date(t * 1000).getHours() === 0 && new Date(t * 1000).getMinutes() === 0;
+      labels.push({ v: new THREE.Vector3(x0 - 1, Y(t), z1), html: `<span class="tick">${mid || step >= 86400 ? dayOf(t) : clock(t)}</span>`, anchor: "r", pri: 5e8 });
+    }
+    world.add(segments(pts, cols, 0.9));
+    labels.push({ v: new THREE.Vector3(x1, YP, z1), html: `<span class="cap">now · ${clock(w1)}</span>`, anchor: "l", pri: 1e9 });
+    labels.push({ v: new THREE.Vector3(x1, YP + TL, z1), html: `<span class="cap">${dayOf(w0)} ${clock(w0)}</span>`, anchor: "l", pri: 1e9 });
+    if (rec && cut > w0) labels.push({ v: new THREE.Vector3(x1, Y(cut), z1), html: `<span class="cap" style="color:var(--accent)">last ${RECENT_LABEL[Number($("recent").value)]}</span>`, anchor: "l", pri: 1e9 });
+  }
+  // messages: a level link between the two columns at the send time, sender's color
+  const msgSegs = [];
+  {
+    const pts = [], cols = [];
+    for (const m of M.msgs) {
+      if (m.ts < w0 || m.ts > w1 || !P.has(m.from)) continue;
+      const dests = m.reach.filter(r => P.has(r) && r !== m.from);
+      if ($("tproj").checked) for (const t of m.to) if (t.kind === "project" && P.has(t.name)) dests.push(t.name);
+      const a = P.get(m.from), y = Y(m.ts), c = tcolor(colorOf(m.from));
+      for (const r of dests) { const b = P.get(r); pts.push(a.x, y, a.z, b.x, y, b.z); cols.push(c.r, c.g, c.b, c.r, c.g, c.b); msgSegs.push({ m, r }); }
+    }
+    const ls = segments(pts, cols, 0.75);
+    ls.visible = $("tmsg").checked; ls.name = "msgs";
+    ls.userData = { info: i => { const { m, r } = msgSegs[i]; return `<b>${esc(m.from)}</b> → <b>${esc(r)}</b> <span class="m">${dayOf(m.ts)} ${clock(m.ts, true)}</span>\n${esc(m.text.slice(0, 400))}`; } };
+    if (msgSegs.length) { world.add(ls); pickables.push(ls); }
+  }
+  // the side panel (machine, git) and the process sleeves around the columns
+  {
+    const byPath = new Map();  // git data comes from the bus host
+    for (const b of blds) if (isLocalFile(b.f, agentsNow)) byPath.set(b.f.path, b);
+    const buildingAt = (repo, rel) => byPath.get(absPath(rel, repo));
+    drawPanel(w0, w1, Y, P, buildingAt);
+  }
+  // drag handles: a grip at the city's front-left corner and one at the graph's, each moves its whole group
+  for (const [grp, x, y, z, what] of [["city", CXw(-CW / 2) - 6, 1, CZw(CD / 2) + 6, "the city"], ["graph", toX(0) - 8, YP, toZ(LH) + 8, "the agent graph"]]) {
+    const h = instanced(1, new THREE.MeshLambertMaterial({ color: accent })); setBox(h, 0, x, y, z, 5, 2, 5);
+    h.userData = { group: grp, handle: true, info: () => `<b>handle</b>: drag to move ${what}\n<span class="m">(or shift-drag anything in it) · sizes: arrange</span>` };
+    world.add(h); pickables.push(h);
+  }
+  // touch lines, aggregated per agent x file x time slice x (edit|read); only the recent span
+  const agg = new Map();
+  for (const t of M.touches) {
+    if (t.ts < cut || t.ts > w1 || !P.has(t.agent) || !buildingIndex.has(t.key)) continue;
+    const bin = Math.min(NB - 1, Math.floor((t.ts - w0) / bw)), k = t.agent + "\u0000" + t.key + "\u0000" + bin + "\u0000" + (t.write ? 1 : 0);
+    const a = agg.get(k); if (a) a.n++; else agg.set(k, { agent: t.agent, key: t.key, bin, write: t.write, n: 1 });
+  }
+  genLabels++;  // new label objects: placeLabels must make their elements, even if the count happens to match
+  S = { agg: [...agg.values()], P, blds, Y, w0, bw, NB, nodes };
+  refilter(false);
+  requestRender();
+}
+// (re)draw the touch lines for the current file / agent selection and highlight the selection
+function refilter(render = true) {
+  if (!S) return;
+  for (const o of world.children.filter(o => o.name === "edits" || o.name === "reads")) { world.remove(o); o.geometry.dispose(); o.material.dispose(); pickables = pickables.filter(p => p !== o); }
+  const groups = { edits: [], reads: [] };
+  for (const a of S.agg) {
+    if ((fileSel && a.key !== fileSel) || (agentSel && a.agent !== agentSel)) continue;
+    groups[a.write ? "edits" : "reads"].push(a);
+  }
+  for (const [name, list] of Object.entries(groups)) {
+    if (!list.length) continue;
+    const pts = [], cols = [];
+    for (const a of list) {
+      const p = S.P.get(a.agent), b = S.blds[buildingIndex.get(a.key)], c = tcolor(colorOf(a.agent));
+      pts.push(p.x, S.Y(S.w0 + (a.bin + 0.5) * S.bw), p.z, b.cx, b.top, b.cz); cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    const sel = fileSel || agentSel, ls = segments(pts, cols, name === "edits" ? (sel ? 0.85 : Math.max(0.06, Math.min(0.5, 7 / Math.sqrt(list.length)))) : (sel ? 0.4 : 0.08));
+    ls.name = name; ls.visible = $(name === "edits" ? "tedit" : "tread").checked;
+    ls.userData = { info: i => { const a = list[i], t = S.w0 + a.bin * S.bw; return `<b>${esc(a.agent)}</b> ${a.write ? "edited" : "read"} ${a.n}× <span class="m">${clock(t)}–${clock(t + S.bw)}</span>\n${esc(fileTitle(a.key))}`; } };
+    world.add(ls); pickables.push(ls);
+  }
+  // dim the buildings the selection doesn't touch
+  if (buildingMesh) {
+    const keep = agentSel ? new Set(S.agg.filter(a => a.agent === agentSel).map(a => a.key)) : null, ground = tcolor("var(--ground)");
+    S.blds.forEach((b, i) => buildingMesh.setColorAt(i, (fileSel ? b.f.key === fileSel : !keep || keep.has(b.f.key)) ? b.color : b.color.clone().lerp(ground, 0.75)));
+    if (buildingMesh.instanceColor) buildingMesh.instanceColor.needsUpdate = true;
+  }
+  renderChips();
+  if (render) requestRender();
+}
+function renderChips() {
+  const c = [];
+  if (agentSel) c.push(`<span class="chip" data-clear="agent" title="show all lines">${esc(agentSel)} ×</span>`);
+  if (fileSel) c.push(`<span class="chip" data-clear="file" title="show all lines">${esc(fileTitle(fileSel))} ×</span>`);
+  $("chips").innerHTML = c.length ? "only: " + c.join(" ") : "";
+}
+$("chips").addEventListener("click", ev => { const b = ev.target.closest("[data-clear]"); if (!b) return; b.dataset.clear === "file" ? fileSel = "" : agentSel = ""; refilter(); });
+
+// ---------- HTML labels, projected each frame we draw ----------
+const lab = $("labels");
+function placeLabels() {
+  if (lab.dataset.gen !== String(genLabels) || lab.childElementCount !== labels.length) {
+    lab.innerHTML = labels.map(l => `<div>${l.html}</div>`).join(""); lab.dataset.gen = String(genLabels);
+    [...lab.children].forEach((el, i) => { labels[i].el = el; labels[i].wd = el.offsetWidth; labels[i].ht = el.offsetHeight; });
+  }
+  const w = stage.clientWidth, h = stage.clientHeight, v = new THREE.Vector3(), v2 = new THREE.Vector3(), placed = [];
+  // most important first; a "tidy" label that would overlap one already placed is hidden (hover the thing for its name)
+  for (const l of [...labels].sort((a, b) => (b.pri ?? 0) - (a.pri ?? 0))) {
+    if (!l.el) continue;
+    if (l.plane && focusPlane && l.plane !== focusPlane) { l.el.style.display = "none"; continue; }
+    v.copy(l.v).project(camera);
+    if (v.z > 1 || v.x < -1.2 || v.x > 1.2 || v.y < -1.2 || v.y > 1.2) { l.el.style.display = "none"; continue; }
+    if (l.v2) {  // level of detail: a directory's label shows once its plot spans minPx on screen
+      v2.copy(l.v2).project(camera);
+      if (Math.hypot((v2.x - v.x) * w, (v2.y - v.y) * h) / 2 < l.minPx) { l.el.style.display = "none"; continue; }
+    }
+    let x = (v.x + 1) / 2 * w, y = (1 - v.y) / 2 * h - l.ht;
+    // c: centered above the point; below: centered under it (agent names, clear of the block you grab); r / l: beside it
+    if (l.anchor === "c") x -= l.wd / 2; else if (l.anchor === "below") { x -= l.wd / 2; y += l.ht + 6; } else if (l.anchor === "r") { x -= l.wd; y += l.ht / 2; } else if (l.anchor === "l") y += l.ht / 2;
+    const hit = () => placed.some(r => x < r[2] && x + l.wd > r[0] && y < r[3] && y + l.ht > r[1]);
+    if (l.stack) for (let k = 0; k < 4 && hit(); k++) y = y - l.ht - 2 < 2 ? y + 2 * (l.ht + 2) : y - l.ht - 2;  // plane captions step out of each other's way (down when there's no room above)
+    if (l.stack) y = Math.max(2, y);  // never under the toolbar
+    if (l.tidy && hit()) { l.el.style.display = "none"; continue; }
+    placed.push([x, y, x + l.wd, y + l.ht]);
+    l.el.style.display = "";
+    l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+  }
+}
+
+// ---------- picking: hover tooltips, clicks, dragging agents ----------
+const ray = new THREE.Raycaster(); ray.params.Line.threshold = 1.2;
+const tipEl = $("tip"), ndc = new THREE.Vector2(), dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -62);
+function aim(ev) { const r = renderer.domElement.getBoundingClientRect(); ndc.set((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); }
+function pick(ev) {
+  aim(ev);
+  const hits = ray.intersectObjects(pickables.filter(o => o.visible), false);
+  if (!hits.length) return null;
+  // solid things (columns, buildings, plots) win over lines: every touch line ends on a roof, so a line is
+  // under the cursor almost everywhere there; lines are hoverable where nothing solid is
+  // an agent's base block wins over everything (its own column sits right above it)
+  const h = hits.find(x => x.object === markers) || hits.find(x => x.object.isMesh) || hits[0];
+  return { obj: h.object, i: h.instanceId ?? Math.floor(h.index / 2), point: h.point };
+}
+let hoverRaf = 0, lastEv = null, down = null;
+const cv = renderer.domElement;
+cv.addEventListener("pointermove", ev => {
+  lastEv = ev;
+  if (fp) { fpLook(ev); return; }
+  if (down?.move) {  // preview: shift the group's meshes; lines and labels catch up on release
+    const m = down.move, hit = new THREE.Vector3(); aim(ev); if (!ray.ray.intersectPlane(m.plane, hit)) return;
+    m.dx = hit.x - m.from.x; m.dz = hit.z - m.from.z;
+    for (const o of world.children) if (o.userData.group === m.grp) o.position.set(m.dx, 0, m.dz);
+    requestRender(); return;
+  }
+  if (down?.drag) { dragTo(ev); return; }
+  if (hoverRaf || down) return;
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    const p = pick(lastEv);
+    if (!p || !p.obj.userData.info) { tipEl.hidden = true; cv.style.cursor = ""; return; }
+    try { tipEl.innerHTML = p.obj.userData.info(p.i); } catch (e) { showErr("tooltip: " + (e.message || e), e); return; }
+    tipEl.hidden = false;
+ cv.style.cursor = p.obj === markers || p.obj.userData.handle ? "grab" : p.obj.userData.click ? "pointer" : "";
+    const tr = tipEl.getBoundingClientRect(); let x = lastEv.clientX + 14, y = lastEv.clientY + 14;
+    if (x + tr.width > innerWidth - 8) x = Math.max(8, lastEv.clientX - tr.width - 14); if (y + tr.height > innerHeight - 8) y = Math.max(8, lastEv.clientY - tr.height - 14);
+    tipEl.style.left = x + "px"; tipEl.style.top = y + "px";
+  });
+});
+cv.addEventListener("pointerleave", () => { tipEl.hidden = true; });
+// capture phase, so a press on an agent's marker can switch the orbit controls off before they see it
+cv.addEventListener("pointerdown", ev => {
+  down = { x: ev.clientX, y: ev.clientY, button: ev.button }; tipEl.hidden = true;
+  const p = pick(ev);
+  if (p && (ev.shiftKey || p.obj.userData.handle) && ev.button === 0 && !fp) {  // shift-drag: move the whole city, or the whole agent graph
+    const grp = p.obj.userData.group; if (!grp) return;
+    controls.enabled = false; cv.setPointerCapture(ev.pointerId);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -p.point.y);
+    down.move = { grp, plane, from: p.point.clone(), dx: 0, dz: 0 };
+    return;
+  }
+  if (p && p.obj === markers) {
+    ev.preventDefault();  // a name label under the pointer would start a native link drag and cancel this one
+    controls.enabled = false; cv.setPointerCapture(ev.pointerId);
+    const n = markers.userData.names[p.i], at = S.P.get(n), hit = new THREE.Vector3();
+    ray.ray.intersectPlane(dragPlane, hit);
+    down.drag = { name: n, ox: at.x - hit.x, oz: at.z - hit.z, moved: false };
+  }
+}, true);
+function dragTo(ev) {
+  const d = down.drag, hit = new THREE.Vector3();
+  if (ev.button === 2 || down.button !== 0) return;  // right-drag is pin/free on release, not a move
+  if (Math.hypot(ev.clientX - down.x, ev.clientY - down.y) < 4 && !d.moved) return;
+  aim(ev); if (!ray.ray.intersectPlane(dragPlane, hit)) return;
+  d.moved = true; d.x = Math.max(toX(0), Math.min(toX(LW), hit.x + d.ox)); d.z = Math.max(toZ(0), Math.min(toZ(LH), hit.z + d.oz));
+  const i = markers.userData.names.indexOf(d.name); if (i < 0) return;  // a live rebuild may have reordered the markers
+  markers.getMatrixAt(i, tmpM); tmpM.decompose(tmpP, tmpQ, tmpS); tmpQ.identity();
+  setBox(markers, i, d.x, YP - 0.8, d.z, tmpS.x, tmpS.y, tmpS.z); markers.instanceMatrix.needsUpdate = true;
+  const l = labels.find(l => l.name === d.name); if (l) l.v.set(d.x, YP - 1.6, d.z);
+  requestRender();
+}
+// pin or free one agent (and let the layout move the others), from the 3D view
+function setPin(name, pinned, x, z) {
+  const node = S.nodes.find(a => a.name === name); if (!node) return;
+  node.pinned = pinned; if (x != null) { node.px = toPx(x); node.py = toPy(z); }
+  savePositions(S.nodes); genLabels++;
+  rebuild().catch(e => { showErr(String(e.message || e), e); });
+}
+cv.addEventListener("pointercancel", () => { down = null; controls.enabled = !fp; });  // a cancelled touch must not stop hover and reloads
+cv.addEventListener("pointerup", ev => {
+  const d = down; down = null; controls.enabled = !fp;
+  if (!d) return;
+  if (d.move) {
+    if (d.move.grp === "city") { ARR.cx += d.move.dx; ARR.cz += d.move.dz; } else { ARR.gx += d.move.dx; ARR.gz += d.move.dz; }
+    saveArr(); relabel(); return;
+  }
+  if (d.drag) {
+    if (d.drag.moved) { setPin(d.drag.name, true, d.drag.x, d.drag.z); return; }
+    if (d.button === 2) { setPin(d.drag.name, !S.P.get(d.drag.name)?.pinned); return; }
+  }
+  if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) > 4 || ev.button) return;  // an orbit / pan drag
+  // the click acts a moment later, so a double-click (recenter) can cancel it: opening the pane would resize the canvas under it
+  clearTimeout(clickT);
+  if (ev.detail > 1) return;  // the second half of a double-click
+  const p = pick(ev);
+  clickT = setTimeout(() => {
+    if (p && p.obj.userData.click) p.obj.userData.click(p.i);
+    else if (fileSel || agentSel) { fileSel = ""; agentSel = ""; refilter(); }
+  }, 230);
+});
+let clickT = 0;
+cv.addEventListener("contextmenu", ev => ev.preventDefault());
+
+// ---------- controls ----------
+function relabel(opts) { genLabels++; rebuild(opts).catch(e => { showErr(String(e.message || e), e); }); }
+$("ranges").addEventListener("click", ev => { const b = ev.target.closest("[data-r]"); if (!b) return; range = Number(b.dataset.r); setPref("an.range", String(range)); fileSel = ""; agentSel = ""; relabel(); });
+$("proj").addEventListener("change", () => relabel());
+for (const id of ["tproj", "thuman"]) { $(id).checked = pref("an.3" + id, $(id).checked ? "1" : "0") === "1"; $(id).addEventListener("change", () => { setPref("an.3" + id, $(id).checked ? "1" : "0"); relabel(); }); }
+for (const id of ["tmsg", "tedit", "tread"]) {
+  $(id).checked = pref("an.3" + id, $(id).checked ? "1" : "0") === "1";
+  $(id).addEventListener("change", () => { setPref("an.3" + id, $(id).checked ? "1" : "0");
+    const name = { tmsg: "msgs", tedit: "edits", tread: "reads" }[id]; for (const o of world.children) if (o.name === name) o.visible = $(id).checked; requestRender(); });
+}
+for (const id of ["recent", "gap"]) {
+  $(id).value = pref("an.3" + id, $(id).value);
+  let t = 0; $(id).addEventListener("input", () => { setPref("an.3" + id, $(id).value); clearTimeout(t); t = setTimeout(() => relabel(), 120); });
+}
+{
+  const sel = $("glayout");
+  sel.innerHTML = LAYOUTS.map(([k, label]) => `<option value="${k}"${k === layoutKind ? " selected" : ""}>${esc(label)}</option>`).join("");
+  sel.onchange = () => { layoutKind = sel.value; setPref("an.glayout", layoutKind); relabel({ fresh: true }); };
+}
+$("gfree").onclick = () => { const o = savedPositions(); for (const p of o.values()) p.pinned = false; writePositions(o); relabel(); };
+$("replan").onclick = () => { forceReplan = true; relabel(); };
+$("help").hidden = pref("an.3help", "1") === "0";
+$("help").onclick = () => { $("help").hidden = true; setPref("an.3help", "0"); };
+darkMq.addEventListener("change", () => relabel());  // after base.js applied the theme
+
+// ---------- city root: show only one directory, filling the whole city ----------
+let cityRoot = pref("an.3root", ""), cityDirs = null;
+function setRoot(p) {
+  cityRoot = (p || "").trim().replace(/\/+$/, "");
+  setPref("an.3root", cityRoot); $("croot").value = cityRoot; forceReplan = true; relabel();
+}
+// breadcrumb of the city's current top directory: each segment narrows to it
+function renderCrumbs(topPath) {
+  const segs = (topPath || "").split("/").filter(Boolean);
+  $("crumbs").innerHTML = `<span class="crumb" data-root="" title="every touched file">all</span>` + segs.map((s, i) => ` / <span class="crumb" data-root="/${esc(segs.slice(0, i + 1).join("/"))}">${esc(s)}</span>`).join("");
+}
+$("crumbs").addEventListener("click", ev => { const c = ev.target.closest("[data-root]"); if (c) setRoot(c.dataset.root); });
+$("croot").value = cityRoot;
+$("croot").addEventListener("keydown", ev => { if (ev.key === "Enter") setRoot($("croot").value); });
+$("crootgo").onclick = () => setRoot($("croot").value);
+$("crootreset").onclick = () => setRoot("");
+// directory labels: hover lights up the plot, click shows only that directory
+lab.addEventListener("mouseover", ev => { const d = ev.target.closest("[data-di]"); if (!d || !cityDirs) return; cityDirs.mesh.setColorAt(Number(d.dataset.di), tcolor("var(--accent)")); cityDirs.mesh.instanceColor.needsUpdate = true; requestRender(); });
+lab.addEventListener("mouseout", ev => { const d = ev.target.closest("[data-di]"); if (!d || !cityDirs) return; const r = cityDirs.dirs[Number(d.dataset.di)]; if (r) { cityDirs.mesh.setColorAt(Number(d.dataset.di), r.color); cityDirs.mesh.instanceColor.needsUpdate = true; requestRender(); } });
+lab.addEventListener("click", ev => { const d = ev.target.closest("[data-dpath]"); if (d) setRoot(d.dataset.dpath); });
+
+// ---------- camera moves: animated fly-to, double-click to orbit around a point, presets ----------
+const UP = new THREE.Vector3(0, 1, 0);
+function setUp(v) {  // OrbitControls caches the up direction at construction; refresh it (three r169 field names)
+  camera.up.copy(v); controls._quat.setFromUnitVectors(camera.up, UP); controls._quatInverse.copy(controls._quat).invert();
+}
+let flight = 0;
+function flyTo(pos, target, ms = 650, up = UP) {
+  cancelAnimationFrame(flight); userMoved = true;
+  const p0 = camera.position.clone(), t0 = controls.target.clone(), start = performance.now();
+  if (!up.equals(camera.up)) setUp(up);
+  const step = now => {
+    const k = Math.min(1, (now - start) / ms), e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;  // ease in-out
+    camera.position.lerpVectors(p0, pos, e); controls.target.lerpVectors(t0, target, e); controls.update(); requestRender();
+    if (k < 1) flight = requestAnimationFrame(step);
+  };
+  flight = requestAnimationFrame(step);
+}
+cv.addEventListener("dblclick", ev => {
+  clearTimeout(clickT);
+  if (fp) return;
+  // whatever is under the cursor, else the ground plane (y = 0) under it
+  let at = pick(ev)?.point;
+  if (!at) { aim(ev); const g = new THREE.Vector3(); if (ray.ray.intersectPlane(new THREE.Plane(UP, 0), g)) at = g; }
+  if (!at) return;
+  flyTo(camera.position.clone().add(at.clone().sub(controls.target)), at.clone(), 450, camera.up.clone());
+});
+const graphCenter = () => new THREE.Vector3(toX(LW / 2), YP + TL / 2, toZ(LH / 2));
+const PRESETS = {
+  // 5: from just under the present, looking up the agents' columns into the past
+  up: () => { const c = graphCenter(); return [new THREE.Vector3(c.x + 25, Math.max(4, YP * 0.35), toZ(LH) + 30), new THREE.Vector3(c.x, YP + TL * 0.7, c.z), UP]; },
+  // 6: from the side, rolled so time runs left (past) to right (now)
+  side: () => { const c = graphCenter(), d = Math.max(TL, CW * ARR.gs) * 1.25; return [new THREE.Vector3(c.x, c.y, c.z + d), c, new THREE.Vector3(1, 0, 0)]; },
+  // 4: straight down onto the city
+  city: () => { const c = new THREE.Vector3(CXw(0), 0, CZw(0)); return [new THREE.Vector3(c.x, Math.max(CW, CD) * ARR.cs * 1.5, c.z + 1), c, UP]; },
+  // 1-3: square on to a side plane, from outside it, framing the plane's width and the time height
+  // (the machine plane is seen from a little above, through the faint process planes in front of it)
+  south: () => facing(new THREE.Vector3((planeSpan.south[0] + planeSpan.south[1]) / 2, YP + TL / 2, planeAt.south()), new THREE.Vector3(0, 0.22, 1).normalize(), planeSpan.south[1] - planeSpan.south[0]),
+  west: () => facing(new THREE.Vector3(planeAt.west(), YP + TL / 2, (planeSpan.west[0] + planeSpan.west[1]) / 2), new THREE.Vector3(-1, 0, 0), planeSpan.west[1] - planeSpan.west[0]),
+  east: () => facing(new THREE.Vector3(planeAt.east(), YP + TL / 2, (planeSpan.east[0] + planeSpan.east[1]) / 2), new THREE.Vector3(1, 0, 0), planeSpan.east[1] - planeSpan.east[0]),
+};
+function facing(c, normal, width) {
+  const t = Math.tan(camera.fov * Math.PI / 360), d = Math.max((TL + 20) / 2 / t, (width + 30) / 2 / t / camera.aspect) * 1.08;
+  return [c.clone().addScaledVector(normal, d), c, UP];
+}
+function preset(k) { if (fp) fpExit(); focusPlane = ["south", "west", "east"].includes(k) ? k : null; applyFocus(); const [pos, tgt, up] = PRESETS[k](); flyTo(pos, tgt, 750, up); }
+for (const b of document.querySelectorAll("[data-preset]")) b.onclick = () => preset(b.dataset.preset);
+$("home").onclick = () => { setUp(UP); focusPlane = null; applyFocus(); home(); };
+document.addEventListener("keydown", ev => {
+  if (ev.target.matches("input:not([type=checkbox]), select, textarea") || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const k = { Digit1: "south", Digit2: "west", Digit3: "east", Digit4: "city", Digit5: "up", Digit6: "side" }[ev.code];
+  if (k) { preset(k); ev.preventDefault(); }
+  else if (ev.code === "Digit0") { setUp(UP); focusPlane = null; applyFocus(); home(); }
+  else if (ev.code === "KeyF" && !fp) fpEnter();
+  else if (ev.code === "KeyR" && !fp) $("roots").click();
+});
+
+// ---------- first person: pointer-lock mouse look, WASD to move, space / E up, ctrl (or Q / C) down, shift sprints, Esc back to orbit ----------
+let fp = null;
+function fpEnter() {
+  cancelAnimationFrame(flight); setUp(UP);
+  const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+  fp = { yaw: Math.atan2(-dir.x, -dir.z), pitch: Math.asin(Math.max(-1, Math.min(1, dir.y))), keys: new Set(), last: performance.now(), raf: 0 };
+  controls.enabled = false; $("fphud").hidden = false; $("fpbtn").setAttribute("aria-pressed", "true");
+  const r = cv.requestPointerLock?.();
+  if (r?.catch) r.catch(e => console.warn("no pointer lock (drag to look instead)", e));
+  fp.raf = requestAnimationFrame(fpTick);
+}
+function fpExit() {
+  if (!fp) return;
+  cancelAnimationFrame(fp.raf); fp = null;
+  if (document.pointerLockElement === cv) document.exitPointerLock();
+  const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+  controls.target.copy(camera.position).addScaledVector(dir, 60); controls.enabled = true; controls.update(); userMoved = true;
+  $("fphud").hidden = true; $("fpbtn").setAttribute("aria-pressed", "false"); requestRender();
+}
+function fpLook(ev) {
+  if (document.pointerLockElement !== cv && !ev.buttons) return;  // without pointer lock: drag to look
+  fp.yaw -= ev.movementX * 0.0025; fp.pitch = Math.max(-1.55, Math.min(1.55, fp.pitch - ev.movementY * 0.0025));
+}
+function fpTick(now) {
+  if (!fp) return;
+  const dt = Math.min(0.1, (now - fp.last) / 1000), sp = Number($("fpspeed").value) * dt * (fp.keys.has("ShiftLeft") || fp.keys.has("ShiftRight") ? 3 : 1);  // shift sprints
+  fp.last = now;
+  const fwd = new THREE.Vector3(-Math.sin(fp.yaw) * Math.cos(fp.pitch), Math.sin(fp.pitch), -Math.cos(fp.yaw) * Math.cos(fp.pitch));
+  const right = new THREE.Vector3(Math.cos(fp.yaw), 0, -Math.sin(fp.yaw)), K = c => fp.keys.has(c);
+  camera.position.addScaledVector(fwd, sp * ((K("KeyW") ? 1 : 0) - (K("KeyS") ? 1 : 0)));
+  camera.position.addScaledVector(right, sp * ((K("KeyD") ? 1 : 0) - (K("KeyA") ? 1 : 0)));
+  camera.position.y += sp * ((K("Space") || K("KeyE") ? 1 : 0) - (K("ControlLeft") || K("ControlRight") || K("KeyQ") || K("KeyC") ? 1 : 0));
+  camera.quaternion.setFromEuler(new THREE.Euler(fp.pitch, fp.yaw, 0, "YXZ"));
+  renderer.render(scene, camera);
+  try { placeLabels(); } catch (e) { showErr("labels: " + (e.message || e), e); }
+  fp.raf = requestAnimationFrame(fpTick);
+}
+document.addEventListener("pointerlockchange", () => { if (fp && document.pointerLockElement !== cv && fp.locked) fpExit(); else if (fp) fp.locked = document.pointerLockElement === cv; });
+document.addEventListener("keydown", ev => {
+  if (!fp) return;
+  if (ev.code === "Escape") { fpExit(); return; }
+  // keep the browser's own shortcuts (ctrl+S, ctrl+D, space scrolling, ...) out of the way while walking; ctrl+W / ctrl+T / ctrl+N
+  // can't be blocked (the browser reserves them), so Q / C also move down
+  fp.keys.add(ev.code); if (ev.code === "Space" || ev.ctrlKey || /^Key[WASDEQC]$/.test(ev.code)) ev.preventDefault();
+});
+document.addEventListener("keyup", ev => { fp?.keys.delete(ev.code); });
+$("fpbtn").onclick = () => fp ? fpExit() : fpEnter();
+$("fpspeed").value = pref("an.3fpspeed", "60");
+$("fpspeed").addEventListener("input", () => setPref("an.3fpspeed", $("fpspeed").value));
+// wheel while walking changes speed (orbit zoom is off then)
+cv.addEventListener("wheel", ev => {
+  if (!fp) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  const s = $("fpspeed"); s.value = Number(s.value) + (ev.deltaY < 0 ? 1 : -1) * Number(s.step); s.dispatchEvent(new Event("input"));
+}, { passive: false, capture: true });
+
+// ---------- up close: a building's text on its roof and its edit history up its sides (only the 1-3 nearest, only when close) ----------
+const near = new Map();  // file key -> {mesh, mats}
+const textCache = new Map();  // file key -> {last, local, info, pending}; refresh after file activity
+function wrapText(ctx, text, W, H) {
+  ctx.fillStyle = "#fbfbf6"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#1d2330"; ctx.font = "13px monospace";
+  const lines = text.split("\n").slice(0, Math.floor(H / 15) - 1);
+  lines.forEach((l, i) => ctx.fillText(l.replace(/\t/g, "    ").slice(0, 70), 6, 16 + i * 15));
+}
+function roofTexture(file) {
+  const { key, path, last } = file, label = fileLabel(file), local = isLocalFile(file, agentsNow) && path.startsWith("/");
+  let entry = textCache.get(key);
+  if (!entry || entry.last !== last || entry.local !== local) {
+    entry = { last, local, info: local ? null : { text: null, why: "contents available only for absolute paths on this server" }, pending: null };
+    textCache.set(key, entry);
+    // Each request owns its entry, so a delayed older reply cannot replace newer cached contents.
+    if (local) entry.pending = api("/fileinfo?path=" + encodeURIComponent(path))
+      .then(info => { entry.info = info.text != null ? { text: info.text } : { text: null, why: info.reason || (info.binary ? "binary" : "too large to show") }; })
+      .catch(e => { entry.info = { text: null, why: String(e.message || e) }; console.error(e); });
+  }
+  const c = document.createElement("canvas"); c.width = c.height = 512;
+  const ctx = c.getContext("2d"), tex = new THREE.CanvasTexture(c);
+  const paint = () => { const g = entry.info;
+    wrapText(ctx, g ? (g.text ?? `${label}\n\n(${g.why})`) : `${label}\n\nloading…`, 512, 512); tex.needsUpdate = true; requestRender(); };
+  paint();
+  if (!entry.info) entry.pending.then(() => {
+    if (textCache.get(key) === entry && near.get(key)?.mats.some(m => m.map === tex)) paint();
+  });
+  return tex;
+}
+function sideTexture(key) {
+  // the file's touches in the window, oldest at the bottom: a band per touch in the toucher's color (edits wide, reads a sliver)
+  const ts = M.touches.filter(t => t.key === key && t.ts >= S.w0).sort((a, b) => a.ts - b.ts).slice(-256);
+  const c = document.createElement("canvas"); c.width = 64; c.height = 256;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#dfe3ea"; ctx.fillRect(0, 0, 64, 256);
+  const bh = 256 / Math.max(1, ts.length);
+  ts.forEach((t, i) => { ctx.fillStyle = "#" + tcolor(colorOf(t.agent)).getHexString(); ctx.fillRect(t.write ? 0 : 24, 256 - (i + 1) * bh, t.write ? 64 : 16, Math.max(1, bh - 0.5)); });
+  return new THREE.CanvasTexture(c);
+}
+function nearDetail() {
+  if (!S?.blds?.length) return;
+  const cam = camera.position, R = 26;
+  // zero cost unless the camera is down among the buildings
+  if (cam.y > HMAX * ARR.ch + R) { if (near.size) clearNear(); return; }
+  const best = [];
+  for (const b of S.blds) {
+    const dx = Math.max(b.x - cam.x, 0, cam.x - (b.x + b.w)), dz = Math.max(b.z - cam.z, 0, cam.z - (b.z + b.d)), dy = Math.max(0, cam.y - b.top);
+    const d = Math.hypot(dx, dy, dz); if (d < R) best.push([d, b]);
+  }
+  best.sort((a, b) => a[0] - b[0]);
+  const want = new Map(best.slice(0, 3).map(([, b]) => [b.f.key, b]));
+  for (const [p, n] of near) if (!want.has(p)) { world.remove(n.mesh); n.mesh.geometry.dispose(); n.mats.forEach(m => { m.map?.dispose(); m.dispose(); }); near.delete(p); }
+  for (const [p, b] of want) {
+    if (near.has(p)) continue;
+    const side = new THREE.MeshLambertMaterial({ map: sideTexture(p) }), top = new THREE.MeshBasicMaterial({ map: roofTexture(b.f) }), bottom = new THREE.MeshLambertMaterial({ color: b.color });
+    const mats = [side, side, top, bottom, side, side], mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w * 1.01, b.h * 1.002, b.d * 1.01), mats);
+    mesh.position.set(b.cx, b.base + b.h / 2, b.cz); world.add(mesh); near.set(p, { mesh, mats: [side, top, bottom] });
+  }
+}
+function clearNear() { for (const [p, n] of near) { world.remove(n.mesh); n.mesh.geometry.dispose(); n.mats.forEach(m => { m.map?.dispose(); m.dispose(); }); near.delete(p); } }
+
+// ---------- arrangement: sizes (sliders) and positions (shift-drag), remembered ----------
+const ARR_IDS = [["acity", "cs"], ["acityh", "ch"], ["agraph", "gs"], ["atime", "tl"], ["aoc", "oc"], ["aos", "os"], ["aow", "ow"], ["aoe", "oe"]];
+for (const [id, key] of ARR_IDS) {
+  $(id).value = ARR[key];
+  let t = 0; $(id).addEventListener("input", () => { ARR[key] = Number($(id).value); saveArr(); clearTimeout(t); t = setTimeout(() => relabel(), 120); });
+}
+$("areset").onclick = () => { ARR = { ...ARR0 }; saveArr(); for (const [id, key] of ARR_IDS) $(id).value = ARR[key]; relabel(); };
+// cores: what you typed wins (remembered); else the bus machine's own count from GET /machine; else 16
+$("cores").value = pref("an.3cores", "");
+$("cores").addEventListener("change", () => { setPref("an.3cores", $("cores").value); relabel(); });
+$("tgit").checked = pref("an.3tgit", "1") === "1";
+$("tgit").addEventListener("change", () => { setPref("an.3tgit", $("tgit").checked ? "1" : "0"); applyFocus(); });
+$("hscale").value = pref("an.3hscale", $("hscale").value); $("hscale").addEventListener("change", () => { setPref("an.3hscale", $("hscale").value); relabel(); });
+$("roots").checked = pref("an.3roots", "1") === "1"; $("roots").addEventListener("change", () => { setPref("an.3roots", $("roots").checked ? "1" : "0"); relabel(); });
+
+
+$("host").textContent = BUS_LABEL;
+// a handle for poking at the scene from devtools (and the headless tests)
+window.ab3d = {
+  screenOf(kind, key) {
+    const v = kind === "file" ? (() => { const b = S?.blds[buildingIndex.get(key)]; return b && new THREE.Vector3(b.cx, b.top - 0.3, b.cz); })()
+      : kind === "marker" ? (() => { const p = S?.P.get(key); return p && new THREE.Vector3(p.x + 2.2, YP, p.z + 2.2); })()
+      : (() => { const p = S?.P.get(key); return p && new THREE.Vector3(p.x, YP + TL * 0.05, p.z); })();
+    if (!v) return null;
+    v.project(camera); const r = cv.getBoundingClientRect();
+    return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
+  },
+  files: () => S ? S.blds.map(b => [b.f.key, b.f.score]).sort((a, b) => b[1] - a[1]) : [],
+  cam: () => [camera.position.toArray().map(Math.round), controls.target.toArray().map(Math.round)],
+  near: () => [...near.keys()],
+  objects: () => world.children.map(o => [o.type, o.count ?? o.geometry?.attributes.position?.count, o.userData.group || o.name || ""]),
+  hor: () => X3.hor && [X3.hor.length, X3.hor[0], X3.hor[X3.hor.length - 1]],
+  closeTo(key) { const b = S.blds[buildingIndex.get(key)]; flyTo(new THREE.Vector3(b.cx + b.w + 6, b.top + 8, b.cz + b.d + 6), new THREE.Vector3(b.cx, b.top, b.cz), 300); return key; },
+  state: () => ({ fileSel, agentSel, plan: plan && { n: plan.n, rects: plan.rects.size, lots: plan.lots.size }, nodes: S?.nodes.map(a => [a.name, Math.round(a.px), Math.round(a.py), a.pinned]),
+    lines: world.children.filter(o => o.isLineSegments).map(o => [o.name, o.geometry.attributes.position.count / 2, o.visible]) }),
+};
+await (async () => { genLabels++; await load(); })();
+setInterval(() => { if ($("live").checked && !document.hidden && !down) { genLabels++; load(); } }, 30000);
+</script>
+</body>
+</html>

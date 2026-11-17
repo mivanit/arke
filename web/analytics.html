@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script src="/auth.js"></script>
+<script src="/base.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arke analytics</title>
+<link rel="stylesheet" href="/arke.css">
+<style>
+:root {
+  /* tool kinds */
+  --k-read: var(--in); --k-edit: var(--warn); --k-shell: var(--accent); --k-other: var(--off);
+  --lw: 168px; --sw: 132px;
+}
+/* easter egg: type "hack the planet" (or the tiny button in the footer) */
+:root.hack {
+  color-scheme: dark;
+  --ground: #020403; --panel: #04100a; --ink: #b8ffd0; --muted: #4f9c72; --line: #0f3324; --line-strong: #1b4a33; --tint: #072014;
+  --accent: #00e5ff; --accent-soft: #06303a; --busy: #ffe94a; --busy-soft: #2a2806; --idle: #39ff7a; --idle-soft: #0a2a16;
+  --warn: #ff2bd6; --warn-soft: #3a0832; --err: #ff3b5c; --in: #39ff7a;
+  --sans: "Share Tech Mono", var(--mono);
+}
+:root.hack body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,0,0,.25) 2px 3px); }
+:root.hack .panel { box-shadow: 0 0 18px rgba(57,255,122,.12); }
+:root.hack .top h1 { color: var(--accent); text-shadow: 0 0 8px var(--accent); }
+
+html, body { margin: 0; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); padding-inline: 16px; padding-block: 0 24px; }
+a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding-block: 12px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.top h1 { font: 600 17px var(--mono); margin: 0; }
+.top .host { font: 12px var(--mono); color: var(--muted); }
+.top .grow { flex: 1; }
+.btn, select, input[type=search] { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+input[type=search] { cursor: text; width: 14em; max-width: 100%; }
+.btn:hover { border-color: var(--accent); }
+.btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; margin-left: -1px; }
+.seg .btn:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.seg .btn:last-child { border-radius: 0 4px 4px 0; }
+.status { font-size: 12px; color: var(--muted); }
+.conn { font-size: 13px; color: var(--err); background: var(--err-soft); border-radius: 4px; padding: 6px 10px; margin-bottom: 12px; white-space: pre-wrap; }
+.conn:empty { display: none; }
+
+
+.wrap { width: min(100%, 1800px); margin-inline: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.head { display: flex; align-items: baseline; gap: 6px 12px; padding: 12px 14px 8px; flex-wrap: wrap; }
+.title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; margin: 0; }
+.sub { color: var(--muted); font-size: 12px; }
+.head .ctl { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.empty { color: var(--muted); padding: 4px 14px 14px; margin: 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+a.name, a.proj { font-family: var(--mono); font-weight: 500; color: var(--ink); text-decoration: underline 2px var(--c, var(--line-strong)); text-underline-offset: 3px; }
+a.name:hover, a.proj:hover { color: var(--accent); }
+.proj { font-size: 12px; margin-right: 6px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* time grids: label column | time track | summary column, shared by the timeline and the file view */
+.tg { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr) var(--sw); padding: 0 14px 10px; overflow-x: clip; }
+.tg.nosum { grid-template-columns: var(--lw) minmax(0, 1fr); }
+.tg > .labels, .tg > .sums { display: flex; flex-direction: column; min-width: 0; }
+.tsvg { display: block; width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: crosshair; overflow: visible; }
+.lab { height: var(--rh, 28px); display: flex; align-items: center; gap: 6px; min-width: 0; padding-right: 8px; font-size: 12.5px; cursor: pointer; border-radius: 4px; }
+.lab:hover { background: var(--tint); }
+.lab.on { background: var(--accent-soft); }
+.lab a, .lab .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lab .fn { font-family: var(--mono); font-size: 12px; direction: rtl; text-align: left; }
+.lab.dir { font: 600 11px var(--mono); color: var(--muted); cursor: default; }
+.lab.dir:hover { background: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--off); }
+.dot.busy { background: var(--busy); } .dot.idle { background: var(--idle); } .dot.offline { background: transparent; border: 1.5px solid var(--off); }
+.sumr { height: var(--rh, 28px); display: flex; align-items: center; justify-content: flex-end; gap: 8px; font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; }
+.sumr b { color: var(--ink); font-weight: 500; }
+.bar { width: 40px; height: 6px; background: var(--tint); border-radius: 3px; overflow: hidden; flex: none; }
+.bar i { display: block; height: 100%; background: var(--busy); }
+.axis text { font: 10.5px var(--sans); fill: var(--muted); }
+.axis line, .gridl { stroke: var(--line); }
+.xh { stroke: var(--ink); stroke-width: 1; opacity: .55; pointer-events: none; }
+.pin { stroke: var(--accent); stroke-width: 1.5; pointer-events: none; }
+.selr { fill: var(--accent); opacity: .15; stroke: var(--accent); pointer-events: none; }
+.dim { opacity: .22; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--muted); padding: 0 14px 8px; align-items: center; }
+.legend svg { vertical-align: middle; margin-right: 4px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 0 14px 8px; font-size: 12px; }
+.chips:empty { display: none; }
+.chip { border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; background: var(--tint); cursor: pointer; font: 12px var(--mono); }
+.chip:hover { border-color: var(--err); }
+
+/* snapshot */
+.snap { border-top: 1px solid var(--line); padding: 8px 14px 12px; }
+.snap h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; }
+.snap h3 .sub { font-weight: 400; margin-left: 6px; }
+.snapg { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 2px 18px; }
+.sn { display: grid; grid-template-columns: 9ch minmax(0, 1fr); gap: 0 8px; font-size: 12px; padding: 2px 0; border-bottom: 1px dashed var(--line); min-width: 0; }
+.sn .who { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; min-width: 0; }
+.sn .st { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.sn .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.sn .what b { color: var(--ink); font-weight: 500; }
+
+/* tables */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tbl th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tbl td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl td.r, .tbl th.r { text-align: right; }
+.tscroll { overflow-x: auto; padding: 0 6px 10px; }
+.flag { display: inline-block; font-size: 11px; border-radius: 3px; padding: 0 5px; margin: 1px 4px 1px 0; white-space: nowrap; }
+.flag.warn { background: var(--warn-soft); color: var(--warn); }
+.flag.busy { background: var(--busy-soft); color: var(--busy); }
+.flag.idle { background: var(--idle-soft); color: var(--idle); }
+.flag.off { background: var(--off-soft); color: var(--muted); }
+.mx td.c { text-align: center; font: 11.5px var(--mono); cursor: pointer; min-width: 30px; }
+.mx td.c.z { color: var(--line-strong); cursor: default; }
+.mx td.c.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mx th.v { writing-mode: vertical-rl; transform: rotate(180deg); text-transform: none; letter-spacing: 0; font: 500 11.5px var(--mono); padding: 6px 2px; vertical-align: bottom; max-height: 140px; }
+.mx th.v a, .mx td a { text-decoration-thickness: 2px; }
+.conf { list-style: none; margin: 0; padding: 0 14px 10px; font-size: 12.5px; }
+.conf li { padding: 3px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
+.conf li:hover { background: var(--tint); }
+.conf .fn { font-family: var(--mono); }
+
+/* activity log */
+.log { list-style: none; margin: 0; padding: 0 14px 12px; font-size: 12.5px; max-height: 520px; overflow-y: auto; }
+.log li { display: grid; grid-template-columns: 5.2ch 12ch minmax(0, 1fr); gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+.log li > * { min-width: 0; max-width: 100%; }
+.log .t { color: var(--muted); font: 11px var(--mono); }
+.log .w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.log .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log .k { font: 10.5px var(--mono); border-radius: 3px; padding: 0 4px; margin-right: 6px; color: var(--panel); }
+.k-read { background: var(--k-read); } .k-edit { background: var(--k-edit); } .k-shell { background: var(--k-shell); } .k-other { background: var(--k-other); }
+.k-msg { background: var(--human); } .k-prompt { background: var(--ink); } .k-state { background: var(--busy); }
+
+#graphsvg { display: block; width: 100%; user-select: none; -webkit-user-select: none; touch-action: none; }
+#graphsvg .gn { cursor: grab; }
+#graphsvg .gn.pinned > circle:first-of-type, #graphsvg .gn.pinned > rect { stroke: var(--ink); stroke-width: 2; }
+#graphsvg .pinmark { fill: var(--ink); stroke: var(--panel); stroke-width: 1; }
+#graphsvg text { font: 11.5px var(--mono); fill: var(--ink); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+#graphsvg a:hover text { fill: var(--accent); }
+#graphsvg .ge { stroke-linecap: round; }
+
+
+#tip { position: fixed; z-index: 100; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: 5px; padding: 6px 9px; font-size: 12px; max-width: min(460px, 92vw); box-shadow: 0 4px 16px rgba(0,0,0,.18); white-space: pre-wrap; overflow-wrap: anywhere; }
+#tip .m { color: var(--muted); }
+footer { width: min(100%, 1800px); margin: 14px auto 0; color: var(--muted); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+#hack { background: none; border: 0; color: var(--line-strong); cursor: pointer; font: 12px var(--mono); padding: 0; }
+#hack:hover { color: var(--accent); }
+
+@media (max-width: 700px) {
+  :root { --lw: 92px; --sw: 0px; }
+  .tg > .sums, .tg > .sumr { display: none; }
+  .tg { grid-template-columns: var(--lw) minmax(0, 1fr); }
+  .tg { padding-inline: 8px; }
+  .log li { grid-template-columns: 5.2ch minmax(0, 1fr); }
+  .log li .w { grid-column: 2; }
+  .log li .x { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+/* timeseries small multiples */
+.tsleg { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; padding: 0 14px 8px; align-items: center; }
+.tsleg [data-focus] { cursor: pointer; font-family: var(--mono); display: inline-flex; align-items: center; gap: 4px; }
+.tsleg [data-focus].dim { opacity: .4; }
+.tsleg i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; background: var(--c); }
+.tsgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 12px 20px; padding: 0 14px 14px; }
+.tsgrid .wide { grid-column: 1 / -1; }
+.tsbox h3 { font-size: 12.5px; margin: 0 0 2px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tsbox h3 .sub { font-weight: 400; }
+.tsbox .note { font-size: 12px; color: var(--muted); padding: 18px 0; border: 1px dashed var(--line); border-radius: 4px; text-align: center; }
+svg.tsc { display: block; width: 100%; cursor: crosshair; user-select: none; -webkit-user-select: none; touch-action: pan-y; overflow: visible; }
+svg.tsc text { font: 10px var(--sans); fill: var(--muted); }
+svg.tsc .gl { stroke: var(--line); stroke-width: 1; }
+svg.tsc .tsx { stroke: var(--ink); stroke-width: 1; opacity: .55; pointer-events: none; }
+svg.tsc .tsbr { fill: var(--accent); opacity: .15; }
+#tip table.tst { border-collapse: collapse; font-size: 11.5px; }
+#tip table.tst td { padding: 0 6px 0 0; } #tip table.tst td.n { text-align: right; font-family: var(--mono); }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>arke analytics</h1>
+  <span class="host" id="host"></span>
+  <a class="btn" id="console" href="/">&larr; console</a>
+  <span class="netstat wait" id="netstat" role="status">connecting</span>
+  <span class="grow"></span>
+  <span class="seg" id="ranges" role="group" aria-label="Time range">
+    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="0">all</button>
+  </span>
+  <select id="proj" aria-label="Project"><option value="">all projects</option></select>
+  <label class="status"><input type="checkbox" id="live" checked> live</label>
+  <span class="status" id="status">loading&hellip;</span>
+</header>
+<div class="wrap">
+<div class="conn" id="conn" role="alert"></div>
+
+<section class="panel" id="p-time">
+  <div class="head">
+    <h2 class="title">Who was doing what, when</h2>
+    <span class="sub" id="winlabel"></span>
+    <div class="ctl">
+      <button class="btn" type="button" id="zout" title="Zoom out 2x">zoom out</button>
+      <button class="btn" type="button" id="pl" title="Pan left">&larr;</button><button class="btn" type="button" id="pr" title="Pan right">&rarr;</button>
+      <label class="sub"><input type="checkbox" id="showoff"> quiet agents</label>
+    </div>
+  </div>
+  <div class="tg nosum" style="padding-bottom:4px">
+    <div class="sub" style="align-self:center">whole log</div>
+    <svg class="tsvg" id="ov" data-scale="all" height="34" aria-label="Activity over the whole log; drag to pick a window"></svg>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div class="chips" id="chips"></div>
+  <div class="tg" id="lanes">
+    <div></div><svg class="tsvg axis" id="ax1" height="20"></svg><div class="sumr" style="height:20px">busy &middot; tools &middot; msgs</div>
+    <div class="labels" id="lanelabs"></div>
+    <svg class="tsvg" id="lanesvg" data-scale="win"></svg>
+    <div class="sums" id="lanesums"></div>
+  </div>
+  <p class="empty" id="lanes-empty" hidden>Nothing happened in this window.</p>
+  <div class="snap" id="snap"></div>
+</section>
+
+<section class="panel" id="p-ts">
+  <div class="head">
+    <h2 class="title">Timeseries</h2>
+    <span class="sub" id="tssub"></span>
+    <div class="ctl">
+      <span class="seg" id="tsmode" role="group" aria-label="Chart style"><button class="btn" type="button" data-m="lines">lines</button><button class="btn" type="button" data-m="stacked">stacked</button></span>
+    </div>
+  </div>
+  <div class="tsleg" id="tsleg"></div>
+  <div class="tsgrid" id="tsgrid"></div>
+</section>
+
+<section class="panel" id="p-files">
+  <div class="head">
+    <h2 class="title">Files touched</h2>
+    <span class="sub" id="fsub"></span>
+    <div class="ctl">
+      <input type="search" id="fq" placeholder="filter paths" aria-label="Filter paths">
+      <label class="sub"><input type="checkbox" id="wonly"> edits only</label>
+      <label class="sub">overlap <select id="ovl"><option value="300">5 min</option><option value="900" selected>15 min</option><option value="3600">1 h</option></select></label>
+    </div>
+  </div>
+  <ul class="conf" id="conflicts"></ul>
+  <div class="tg" id="files" style="--rh:22px">
+    <div></div><svg class="tsvg axis" id="ax2" height="20"></svg><div class="sumr" style="height:20px">edits &middot; reads</div>
+    <div class="labels" id="filelabs"></div>
+    <svg class="tsvg" id="filesvg" data-scale="win"></svg>
+    <div class="sums" id="filesums"></div>
+  </div>
+  <p class="empty" id="files-empty" hidden></p>
+</section>
+
+<div class="cols">
+  <section class="panel" id="p-talk">
+    <div class="head"><h2 class="title">Who talks to whom</h2><span class="sub">messages in the window; rows send, columns receive. Click a cell to trace it on the timeline.</span></div>
+    <div class="tscroll" id="matrix"></div>
+    <div class="tscroll" id="flow"></div>
+  </section>
+  <section class="panel" id="p-now">
+    <div class="head"><h2 class="title">Idle, busy, stuck: right now</h2><span class="sub" id="nowsub"></span></div>
+    <div class="tscroll" id="nowtbl"></div>
+  </section>
+</div>
+
+<section class="panel" id="p-graph">
+  <div class="head">
+    <h2 class="title">Graph</h2>
+    <span class="sub" id="gsub"></span>
+    <div class="ctl">
+      <select id="glayout" aria-label="Graph layout" title="Layout algorithm"></select>
+      <label class="sub"><input type="checkbox" id="gproj"> projects</label>
+      <label class="sub"><input type="checkbox" id="ghuman" checked> human</label>
+      <button class="btn" type="button" id="gfree" title="Unpin every node and let the layout move them">free all</button>
+      <button class="btn" type="button" id="greset" title="Forget saved positions and pins, lay out again from scratch">re-layout</button>
+      <a class="btn" id="to3d" href="analytics3d" title="The same graph in 3D, with time as depth and a city map of the files">3D view &rarr;</a>
+    </div>
+  </div>
+  <svg id="graphsvg" height="480" aria-label="Who talks to whom as a graph: agents that message each other more sit closer"></svg>
+  <div class="legend">agents that message each other more sit closer · node size = activity (tool calls + messages) · edge width = messages both ways · drag a node to move and pin it (ringed dot); right-click or double-click pins / frees it · click a node to focus it and open its details, its name opens the console</div>
+</section>
+
+<section class="panel" id="p-log">
+  <div class="head"><h2 class="title">Activity log</h2><span class="sub" id="logsub"></span>
+    <div class="ctl"><input type="search" id="lq" placeholder="filter text" aria-label="Filter activity"></div></div>
+  <ul class="log" id="log"></ul>
+</section>
+</div>
+<footer><span>Read-only view of the bus event log (<code>GET /events</code>). Drag on any timeline to zoom, double-click to reset, click to pin a moment.</span><span class="grow"></span><button id="hack" type="button" title="hack the planet">&#x2301;</button></footer>
+<div id="tip" hidden></div>
+<aside id="pane" hidden aria-label="Details">
+  <div id="pgrip" title="drag to resize"></div>
+  <div class="phead"><span id="ptitle"></span><button class="btn" type="button" id="pclose" title="Close (Esc)" aria-label="Close details">&times;</button></div>
+  <div id="pbody"></div>
+</aside>
+
+<script src="graph-layout.js"></script>
+<script src="analytics-shared.js"></script>
+<script src="analytics-page.js"></script>
+<script>
+"use strict";
+window.addEventListener("arke-unlocked", () => load());
+const agentLink = n => n === "human" ? `<span class="name" style="font-family:var(--mono);color:var(--human)">human</span>`
+  : `<a class="name" style="--c:${colorOf(n)}" href="${esc(agentHref(n))}">${esc(n)}</a>`;
+const projLink = p => `<a class="proj" style="--c:${colorOf(p)}" href="${esc(projHref(p))}">${esc(p)}</a>`;
+
+const KINDS = ["edit", "read", "shell", "other"];
+
+// ---------- data ----------
+const TYPES = "state,update,tool,message,prompt,wake,join,rename,takeover,forget,usage,procs";
+let loading = false;
+// state at time t from transitions ([ts, state], sorted): binary search for the last one at or before t
+function stateAt(L, t) {
+  let lo = 0, hi = L.trans.length - 1, r = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (L.trans[mid][0] <= t) { r = mid; lo = mid + 1; } else hi = mid - 1; }
+  return r < 0 ? null : { state: L.trans[r][1], since: L.trans[r][0] };
+}
+function lastBefore(arr, t) {  // arr sorted by ts
+  let lo = 0, hi = arr.length - 1, r = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (arr[mid].ts <= t) { r = mid; lo = mid + 1; } else hi = mid - 1; }
+  return r < 0 ? null : arr[r];
+}
+async function load() {
+  if (loading) return; loading = true;
+  try {
+    $("conn").textContent = await readEvents(TYPES);
+    $("status").textContent = `${raw.length.toLocaleString()} events · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
+    render();
+  } catch (e) {
+    $("conn").textContent = String(e.message || e);
+    $("status").textContent = "load failed (partial data kept)";
+    console.error(e);
+    build(); render();  // an interrupted reset must also replace the old model when the new log is empty
+  } finally { loading = false; }
+}
+
+// ---------- view state ----------
+let focus = new Set();     // agents clicked to focus
+let pair = null;           // [from, to] traced from the matrix
+let fileSel = "";          // a file picked in the file view
+let hoverT = null, pinT = null;
+const focused = n => !focus.size || focus.has(n);
+
+// ---------- scales and axes ----------
+let W = 600;
+const X = (t, w0, w1, width = W) => (t - w0) / (w1 - w0) * width;
+function axis(svg, w0, w1) {
+  const width = svg.clientWidth || W, step = STEPS.find(s => (w1 - w0) / s <= Math.max(2, width / 90)) || 172800;
+  const off = new Date().getTimezoneOffset() * 60, first = Math.ceil((w0 - off) / step) * step + off;
+  let h = "";
+  for (let t = first; t <= w1; t += step) {
+    const x = X(t, w0, w1, width), midnight = new Date(t * 1000).getHours() === 0 && new Date(t * 1000).getMinutes() === 0;
+    h += `<line x1="${x}" x2="${x}" y1="14" y2="20"/><text x="${x}" y="11" text-anchor="middle">${midnight || step >= 86400 ? dayOf(t) : clock(t)}</text>`;
+  }
+  svg.innerHTML = h + `<line class="xh" y1="0" y2="20" hidden/>`;
+}
+function gridLines(w0, w1, height) {
+  const step = STEPS.find(s => (w1 - w0) / s <= Math.max(2, W / 90)) || 172800, off = new Date().getTimezoneOffset() * 60;
+  let h = "";
+  for (let t = Math.ceil((w0 - off) / step) * step + off; t <= w1; t += step) h += `<line class="gridl" x1="${X(t, w0, w1)}" x2="${X(t, w0, w1)}" y1="0" y2="${height}"/>`;
+  return h;
+}
+
+// tooltips: elements carry data-i -> tips[i] (html)
+let tips = [];
+const tip = html => `data-i="${tips.push(html) - 1}"`;
+
+// ---------- render ----------
+let renderPending = false;
+const dragging = () => drag || G.drag || TS.br;
+function render() {
+  if (!M) return;
+  if (dragging()) { renderPending = true; return; }
+  renderPending = false;
+  tips = [];
+  for (const b of $("ranges").children) b.setAttribute("aria-pressed", String(!win && Number(b.dataset.r) === range));
+  const [w0, w1] = winNow();
+  $("winlabel").textContent = `${dayOf(w0)} ${clock(w0)} – ${clock(w1)} (${dur(w1 - w0)})${win ? " · zoomed" : ""}`;
+  $("lanes").hidden = false;  // measure it shown: a window with nothing in it hid it (renderLanes hides it again)
+  W = $("lanesvg").clientWidth || $("lanesvg").parentElement.clientWidth - 300;
+  renderOverview(w0, w1);
+  const shown = renderLanes(w0, w1);
+  renderSnap();
+  renderFiles(w0, w1);
+  renderTalk(w0, w1, shown);
+  renderGraph(w0, w1);
+  renderNow();
+  renderLog(w0, w1);
+  renderChips();
+  renderTS(w0, w1);
+  drawCross();
+}
+
+function renderOverview(w0, w1) {
+  const svg = $("ov"), width = svg.clientWidth || W, n = Math.max(20, Math.floor(width / 4)), a = M.t0, b = M.t1, bins = new Array(n).fill(0);
+  for (const L of M.lanes.values()) if (inProj(L)) for (const e of L.tools) bins[Math.min(n - 1, Math.floor((e.ts - a) / (b - a) * n))]++;
+  for (const m of M.msgs) bins[Math.min(n - 1, Math.floor((m.ts - a) / (b - a) * n))]++;
+  const mx = Math.max(1, ...bins), bw = width / n;
+  let h = bins.map((v, i) => v ? `<rect x="${i * bw}" y="${30 - v / mx * 28}" width="${Math.max(1, bw - 0.5)}" height="${v / mx * 28}" fill="var(--muted)" opacity=".55"/>` : "").join("");
+  const x0 = X(w0, a, b, width), x1 = X(w1, a, b, width);
+  h += `<rect x="${x0}" y="0" width="${Math.max(2, x1 - x0)}" height="32" fill="var(--accent)" opacity=".14" stroke="var(--accent)"/>`;
+  h += `<line x1="0" x2="${width}" y1="30.5" y2="30.5" stroke="var(--line)"/>`;
+  h += `<text x="2" y="10" font-size="10" fill="var(--muted)">${esc(dayOf(a))} ${clock(a)}</text><text x="${width - 2}" y="10" font-size="10" fill="var(--muted)" text-anchor="end">${clock(b)}</text>`;
+  svg.innerHTML = h + `<line class="xh" y1="0" y2="32" hidden/>`;
+}
+
+const RH = 28;
+function renderLanes(w0, w1) {
+  const quiet = $("showoff").checked;
+  let ls = [...M.lanes.values()].filter(L => inProj(L));
+  const act = L => L.tools.filter(e => e.ts >= w0 && e.ts <= w1).length * 1 + L.sent.filter(m => m.ts >= w0 && m.ts <= w1).length * 3
+    + L.recv.filter(m => m.ts >= w0 && m.ts <= w1).length + L.prompts.filter(p => p.ts >= w0 && p.ts <= w1).length * 2 + busySpans(L, w0, w1, agentsNow, nowS()).length;
+  const score = new Map(ls.map(L => [L.name, act(L)]));
+  ls = ls.filter(L => quiet ? L.first <= w1 : score.get(L.name) > 0 || focus.has(L.name));
+  // human on top, then busiest first
+  ls.sort((a, b) => (b.name === "human") - (a.name === "human") || score.get(b.name) - score.get(a.name) || a.name.localeCompare(b.name));
+  $("lanes-empty").hidden = ls.length > 0;
+  $("lanes").hidden = !ls.length;
+  const H = ls.length * RH, Y = new Map(ls.map((L, i) => [L.name, i * RH]));
+  const svg = $("lanesvg"); svg.setAttribute("height", H);
+  axis($("ax1"), w0, w1);
+  let bg = gridLines(w0, w1, H), body = "", arrows = "";
+  if (M.firstTool > w0) { const xe = X(Math.min(M.firstTool, w1), w0, w1);
+    bg += `<rect x="0" y="0" width="${xe}" height="${H}" fill="var(--off-soft)" opacity=".5" ${tip(`The log has no tool calls before ${dayOf(M.firstTool)} ${clock(M.firstTool)} (older server version): only states and messages here.`)}/>`; }
+  const nMsg = M.msgs.filter(m => m.ts >= w0 && m.ts <= w1).length, aOp = nMsg > 150 ? ".55" : ".9";
+  ls.forEach((L, i) => {
+    const y = i * RH, c = colorOf(L.name), dim = focused(L.name) ? "" : ' class="dim"';
+    let g = "";
+    if (i % 2) bg += `<rect x="0" y="${y}" width="${W}" height="${RH}" fill="var(--tint)" opacity=".6"/>`;
+    // presence: thin line from first to last sight
+    const pa = Math.max(L.first, w0), pb = Math.min(Math.max(L.last, agentsNow.some(a => a.name === L.name && a.state !== "offline") ? M.t1 : L.last), w1);
+    if (pb > pa) g += `<line x1="${X(pa, w0, w1)}" x2="${X(pb, w0, w1)}" y1="${y + RH / 2}" y2="${y + RH / 2}" stroke="${c}" stroke-opacity=".5" stroke-width="1"/>`;
+    // busy spans, with long tool-less stretches hatched ("busy but silent": waiting on a long command, or stuck)
+    for (const [a, b] of busySpans(L, w0, w1, agentsNow, nowS())) {
+      const xa = X(a, w0, w1), xb = X(b, w0, w1);
+      const nt = L.tools.filter(e => e.ts >= a && e.ts <= b).length;
+      g += `<rect x="${xa}" y="${y + 5}" width="${Math.max(1.5, xb - xa)}" height="${RH - 10}" rx="2" fill="${c}" fill-opacity=".28" stroke="${c}" stroke-opacity=".5" ${tip(`<b>${esc(L.name)}</b> busy ${clock(a, true)}–${clock(b, true)} (${dur(b - a)})\n${nt} tool calls`)}/>`;
+      let prev = a;
+      for (const e of [...L.tools.filter(e => e.ts >= a && e.ts <= b), { ts: b }]) {
+        if (e.ts - prev > 600 && prev >= M.firstTool) { const x0 = X(prev, w0, w1), x1 = X(e.ts, w0, w1);
+          g += `<rect x="${x0}" y="${y + 5}" width="${x1 - x0}" height="${RH - 10}" fill="url(#hatch)" ${tip(`<b>${esc(L.name)}</b> busy but no tool call for ${dur(e.ts - prev)}\n${clock(prev, true)}–${clock(e.ts, true)}: a long command, thinking, or stuck`)}/>`; }
+        prev = e.ts;
+      }
+    }
+    // tool ticks colored by kind; >1 per pixel collapse into one tick (tooltip shows the latest)
+    let lastX = -9;
+    for (const e of L.tools) {
+      if (e.ts < w0 || e.ts > w1) continue;
+      const x = X(e.ts, w0, w1);
+      if (x - lastX < 1.2) continue; lastX = x;
+      const fs = e.files.length ? "\n" + e.files.slice(0, 6).map(f => (f.write ? "✎ " : "· ") + f.path).join("\n") : "";
+      g += `<line x1="${x}" x2="${x}" y1="${y + (e.kind === "edit" ? 3 : 8)}" y2="${y + RH - (e.kind === "edit" ? 3 : 8)}" stroke="var(--k-${e.kind})" stroke-width="${e.kind === "edit" ? 2.2 : 1.4}" ${tip(`<b>${esc(L.name)}</b> <span class="m">${clock(e.ts, true)}</span> ${esc(e.tool)}\n${esc(e.desc || e.target.slice(0, 300))}${esc(fs)}`)}/>`;
+    }
+    // prompts: filled triangle under the lane (hollow = woken by the bus); wake attempts: small diamond
+    for (const p of L.prompts) if (p.ts >= w0 && p.ts <= w1) { const x = X(p.ts, w0, w1);
+      g += `<path d="M${x - 4} ${y + RH - 1}L${x + 4} ${y + RH - 1}L${x} ${y + RH - 7}Z" fill="${p.wake ? "var(--panel)" : "var(--ink)"}" stroke="var(--ink)" stroke-width="1" ${tip(`<b>${esc(L.name)}</b> ${p.wake ? "woken (bus typed a nudge)" : "prompt from its human"} at ${clock(p.ts, true)}`)}/>`; }
+    for (const k of L.wakes) if (k.ts >= w0 && k.ts <= w1) { const x = X(k.ts, w0, w1);
+      g += `<path d="M${x} ${y + 1}L${x + 3.5} ${y + 4.5}L${x} ${y + 8}L${x - 3.5} ${y + 4.5}Z" fill="${k.ok ? "var(--busy)" : "var(--err)"}" ${tip(`wake ${esc(L.name)} by ${esc(k.sender)} at ${clock(k.ts, true)}${k.ok ? "" : "\nfailed: " + esc(k.error)}`)}/>`; }
+    body += `<g${dim}>${g}</g>`;
+  });
+  // messages: an arrow from sender lane to each receiver lane at send time
+  for (const m of M.msgs) {
+    if (m.ts < w0 || m.ts > w1 || !Y.has(m.from)) continue;
+    const x = X(m.ts, w0, w1), ya = Y.get(m.from) + RH / 2, c = colorOf(m.from);
+    const traced = pair && pair[0] === m.from && m.reach.includes(pair[1]);
+    const dim = pair ? !traced : !(focused(m.from) || m.reach.some(focused));
+    const tipH = tip(`<b>${esc(m.from)}</b> → ${esc(m.to.map(t => t.name).join(", ") || m.reach.join(", "))} <span class="m">${clock(m.ts, true)}${m.reach.length ? ` · reached ${m.reach.length}` : ""}</span>\n${esc(m.text.slice(0, 500))}`);
+    const targets = m.reach.filter(r => Y.has(r) && r !== m.from);
+    if (!targets.length) { arrows += `<circle cx="${x}" cy="${ya}" r="3" fill="${c}"${dim ? ' opacity=".2"' : ""} ${tipH}/>`; continue; }
+    for (const r of targets) {
+      const yb = Y.get(r) + RH / 2, d = yb > ya ? -4 : 4, bend = Math.min(18, Math.abs(yb - ya) / 4);
+      arrows += `<path d="M${x} ${ya}Q${x + bend} ${(ya + yb) / 2} ${x} ${yb + d}" fill="none" stroke="${c}" stroke-width="${traced ? 2.4 : 1.3}" ${dim ? 'opacity=".15"' : `opacity="${aOp}"`} marker-end="url(#ah)" ${tipH}/>`;
+    }
+    arrows += `<circle cx="${x}" cy="${ya}" r="2.2" fill="${c}"${dim ? ' opacity=".2"' : ""}/>`;
+  }
+  svg.innerHTML = `<defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5" stroke="var(--warn)" stroke-width="1.6" opacity=".6"/></pattern>
+    <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L8 4L0 8Z" fill="context-stroke"/></marker></defs>`
+    + bg + body + arrows + `<line class="pin" y1="0" y2="${H}" hidden/><line class="xh" y1="0" y2="${H}" hidden/><rect class="selr" y="0" height="${H}" width="0" hidden/>`;
+  // labels and per-lane numbers
+  $("lanelabs").innerHTML = ls.map(L => {
+    const s = L.name === "human" ? null : (agentsNow.find(a => a.name === L.name)?.state || "offline");
+    return `<div class="lab${focus.has(L.name) ? " on" : ""}" data-focus="${esc(L.name)}" title="click to focus ${esc(L.name)}; the name opens it in the console">${s ? `<span class="dot ${s}" title="now: ${s}"></span>` : ""}${agentLink(L.name)}</div>`;
+  }).join("");
+  $("lanesums").innerHTML = ls.map(L => {
+    const busy = busySpans(L, w0, w1, agentsNow, nowS()).reduce((s, [a, b]) => s + b - a, 0), frac = busy / (w1 - w0);
+    const nt = L.tools.filter(e => e.ts >= w0 && e.ts <= w1).length, so = L.sent.filter(m => m.ts >= w0 && m.ts <= w1).length, ri = L.recv.filter(m => m.ts >= w0 && m.ts <= w1).length;
+    return `<div class="sumr" title="busy ${dur(busy)} of ${dur(w1 - w0)} (${Math.round(frac * 100)}%) · ${nt} tool calls · ${so} sent, ${ri} received"><span class="bar"><i style="width:${Math.round(frac * 100)}%"></i></span><b>${nt}</b><span>${so}↑${ri}↓</span></div>`;
+  }).join("");
+  M.shown = ls;
+  return ls;
+}
+
+function renderSnap() {
+  if (!M.shown) return;
+  const [, w1] = winNow(), T = hoverT ?? pinT ?? w1, live = T >= M.t1 - 5;
+  const rows = M.shown.filter(L => L.name !== "human" && focused(L.name)).map(L => {
+    const st = stateAt(L, T), tool = lastBefore(L.tools, T), msg = lastBefore(L.sent, T);
+    const s = st ? st.state : "?";
+    const doing = tool ? `<b>${esc(tool.tool)}</b> ${esc((tool.desc || tool.files.map(f => f.path).join(" ") || tool.target).slice(0, 140))} <span class="st">${dur(T - tool.ts)} before</span>` : "no tool calls yet";
+    const said = msg && T - msg.ts < 1800 ? `<div class="what" style="grid-column:2">said ${dur(T - msg.ts)} before → ${esc(msg.reach.join(", ") || msg.to.map(t => t.name).join(", ") || "?")}: ${esc(msg.text.slice(0, 120))}</div>` : "";
+    return `<div class="sn"><div class="who"><span class="dot ${s}"></span>${agentLink(L.name)} <span class="st">${s}${st ? " for " + dur(T - st.since) : ""}</span></div><div class="st">last tool</div><div class="what">${doing}</div>${said}</div>`;
+  });
+  $("snap").innerHTML = `<h3>${live ? "Now" : `At ${dayOf(T)} ${clock(T, true)}`}<span class="sub">${pinT != null && hoverT == null ? "pinned · click the timeline again to unpin" : "hover the timeline to move this moment; click to pin it"}</span></h3><div class="snapg">${rows.join("") || '<span class="sub">no agents in view</span>'}</div>`;
+}
+
+function renderFiles(w0, w1) {
+  const q = $("fq").value.trim().toLowerCase(), wonly = $("wonly").checked, N = Number($("ovl").value);
+  const lanesOk = new Set([...M.lanes.values()].filter(inProj).map(L => L.name));
+  const ts = M.touches.filter(t => t.ts >= w0 && t.ts <= w1 && lanesOk.has(t.agent) && focused(t.agent) && (!wonly || t.write) && (!q || fileLabel(t).toLowerCase().includes(q)));
+  const byFile = new Map();
+  for (const t of ts) { if (!byFile.has(t.key)) byFile.set(t.key, []); byFile.get(t.key).push(t); }
+  // overlaps: two different agents editing the same file within N seconds of each other
+  const conflicts = [];
+  for (const [key, arr] of byFile) {
+    const w = arr.filter(t => t.write);
+    for (let i = 0; i < w.length; i++) for (let j = i + 1; j < w.length && w[j].ts - w[i].ts <= N; j++)
+      if (w[j].agent !== w[i].agent) { conflicts.push({ key, a: w[i], b: w[j] }); break; }
+  }
+  const confFiles = new Map();
+  for (const c of conflicts) { const o = confFiles.get(c.key) || { key: c.key, label: fileLabel(c.a), n: 0, agents: new Set(), last: 0, first: Infinity }; o.n++; o.agents.add(c.a.agent); o.agents.add(c.b.agent); o.last = Math.max(o.last, c.b.ts); o.first = Math.min(o.first, c.a.ts); confFiles.set(c.key, o); }
+  $("conflicts").innerHTML = [...confFiles.values()].sort((a, b) => b.last - a.last).slice(0, 8).map(o =>
+    `<li data-file="${esc(o.key)}"><span class="flag warn">overlap</span><span class="fn">${esc(o.label)}</span>: edited by ${[...o.agents].map(agentLink).join(", ")} within ${dur(N)} of each other, ${o.n}× (latest ${clock(o.last)})</li>`).join("");
+  // rows: files grouped by directory; directories ordered by activity, files by activity within; capped
+  const score = arr => arr.filter(t => t.write).length * 3 + arr.length;
+  const dirs = new Map();
+  for (const [key, arr] of byFile) { const f = arr[0], d = (f.host ? f.host + ":" : "") + (f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "."); if (!dirs.has(d)) dirs.set(d, []); dirs.get(d).push([key, arr]); }
+  const dirList = [...dirs].map(([d, fs]) => [d, fs.sort((a, b) => confFiles.has(b[0]) - confFiles.has(a[0]) || score(b[1]) - score(a[1])), fs.reduce((s, f) => s + score(f[1]), 0)]).sort((a, b) => b[2] - a[2]);
+  const LIMIT = 60, rows = [];
+  let nfiles = 0;
+  for (const [d, fs] of dirList) {
+    if (nfiles >= LIMIT) break;
+    rows.push({ dir: d, n: fs.length });
+    for (const [key, arr] of fs.slice(0, Math.max(3, LIMIT - nfiles))) { rows.push({ key, path: arr[0].path, label: fileLabel(arr[0]), arr }); nfiles++; if (nfiles >= LIMIT) break; }
+  }
+  $("fsub").textContent = byFile.size ? `${byFile.size} files, ${ts.filter(t => t.write).length} edits, ${ts.length - ts.filter(t => t.write).length} reads/mentions${byFile.size > nfiles ? ` · showing the ${nfiles} busiest (filter to find others)` : ""} · paths parsed from shell commands are best-effort` : "";
+  $("files-empty").hidden = byFile.size > 0;
+  $("files-empty").textContent = q ? `No file matching “${q}” in this window.` : "No file touches in this window.";
+  $("files").hidden = !byFile.size;
+  const FH = 22, H = rows.length * FH, svg = $("filesvg");
+  svg.setAttribute("height", H);
+  axis($("ax2"), w0, w1);
+  let h = gridLines(w0, w1, H);
+  rows.forEach((r, i) => {
+    const y = i * FH;
+    if (r.dir != null) { h += `<line x1="0" x2="${W}" y1="${y + FH - .5}" y2="${y + FH - .5}" stroke="var(--line-strong)"/>`; return; }
+    if (r.key === fileSel) h += `<rect x="0" y="${y}" width="${W}" height="${FH}" fill="var(--accent-soft)"/>`;
+    // overlap windows shaded behind the marks
+    for (const c of conflicts) if (c.key === r.key) { const xa = X(c.a.ts, w0, w1), xb = X(c.b.ts, w0, w1);
+      h += `<rect x="${xa - 2}" y="${y + 1}" width="${Math.max(4, xb - xa + 4)}" height="${FH - 2}" fill="var(--warn)" opacity=".2" ${tip(`<b>overlap</b> on ${esc(r.label)}\n${esc(c.a.agent)} edited ${clock(c.a.ts, true)}, ${esc(c.b.agent)} edited ${clock(c.b.ts, true)} (${dur(c.b.ts - c.a.ts)} apart)`)}/>`; }
+    for (const t of r.arr) {
+      const x = X(t.ts, w0, w1), c = colorOf(t.agent);
+      const tp = tip(`<b>${esc(t.agent)}</b> ${t.write ? "edited" : "read / mentioned"} <span class="m">${clock(t.ts, true)}</span>\n${esc(r.label)}\n${esc(t.ev.tool)}: ${esc((t.ev.desc || t.ev.target).slice(0, 240))}`);
+      h += t.write ? `<rect x="${x - 2}" y="${y + 3}" width="4" height="${FH - 6}" rx="1" fill="${c}" ${tp}/>`
+        : `<circle cx="${x}" cy="${y + FH / 2}" r="2.6" fill="none" stroke="${c}" stroke-width="1.4" ${tp}/>`;
+    }
+  });
+  svg.innerHTML = h + `<line class="pin" y1="0" y2="${H}" hidden/><line class="xh" y1="0" y2="${H}" hidden/><rect class="selr" y="0" height="${H}" width="0" hidden/>`;
+  $("filelabs").innerHTML = rows.map(r => r.dir != null ? `<div class="lab dir" title="${esc(r.dir)}">${esc(r.dir)}/</div>`
+    : `<div class="lab${r.key === fileSel ? " on" : ""}" data-file="${esc(r.key)}" title="${esc(r.label)}: click for its details and to list its touches in the activity log"><span class="fn">${esc(r.path.split("/").pop())}</span>${confFiles.has(r.key) ? '<span class="flag warn" style="margin:0">!</span>' : ""}</div>`).join("");
+  $("filesums").innerHTML = rows.map(r => {
+    if (r.dir != null) return `<div class="sumr">${r.n} files</div>`;
+    const w = r.arr.filter(t => t.write).length, ag = [...new Set(r.arr.map(t => t.agent))];
+    return `<div class="sumr" title="${w} edits, ${r.arr.length - w} reads by ${esc(ag.join(", "))}"><b>${w}</b><span>${r.arr.length - w}</span><span>${ag.length > 1 ? ag.length + " agents" : ""}</span></div>`;
+  }).join("");
+}
+
+function renderTalk(w0, w1, shown) {
+  const ms = M.msgs.filter(m => m.ts >= w0 && m.ts <= w1 && (inProj(M.lanes.get(m.from) || { projects: new Set(), name: m.from }) || m.reach.some(r => M.lanes.has(r) && inProj(M.lanes.get(r)))));
+  if (!ms.length) { $("matrix").innerHTML = `<p class="empty">No messages in this window.</p>`; $("flow").innerHTML = ""; return; }
+  const cnt = new Map(), key = (a, b) => a + "\u0000" + b;
+  for (const m of ms) for (const r of m.reach) cnt.set(key(m.from, r), (cnt.get(key(m.from, r)) || 0) + 1);
+  const senders = [...new Set(ms.map(m => m.from))], recvs = [...new Set(ms.flatMap(m => m.reach))];
+  const tot = n => ms.filter(m => m.from === n).length + ms.filter(m => m.reach.includes(n)).length;
+  const order = [...new Set([...senders, ...recvs])].sort((a, b) => (b === "human") - (a === "human") || tot(b) - tot(a));
+  const rowsN = order.filter(n => senders.includes(n)).slice(0, 24), colsN = order.filter(n => recvs.includes(n)).slice(0, 24);
+  const mx = Math.max(1, ...cnt.values());
+  let h = `<table class="tbl mx"><thead><tr><th>from \\ to</th>${colsN.map(c => `<th class="v">${agentLink(c)}</th>`).join("")}<th class="r">sent</th></tr></thead><tbody>`;
+  for (const r of rowsN) {
+    h += `<tr><td>${agentLink(r)}</td>` + colsN.map(c => {
+      const v = cnt.get(key(r, c)) || 0, sel = pair && pair[0] === r && pair[1] === c;
+      return v ? `<td class="c${sel ? " sel" : ""}" data-pair="${esc(r)} ${esc(c)}" style="background:color-mix(in srgb, ${colorOf(r)} ${Math.round(12 + 70 * v / mx)}%, transparent)" title="${esc(r)} → ${esc(c)}: ${v} messages">${v}</td>` : `<td class="c z">·</td>`;
+    }).join("") + `<td class="r num">${ms.filter(m => m.from === r).length}</td></tr>`;
+  }
+  h += `</tbody></table>`;
+  $("matrix").innerHTML = h;
+  // bottlenecks: who receives a lot, how long they take to answer, and how many direct messages are still unanswered
+  const stats = order.filter(n => n !== "human").map(n => {
+    const inbound = ms.filter(m => m.reach.includes(n) && m.from !== n), out = M.msgs.filter(m => m.from === n);
+    const lat = [], unans = [];
+    for (const m of inbound) {
+      const reply = out.find(o => o.ts > m.ts && o.reach.includes(m.from));
+      if (reply) lat.push(reply.ts - m.ts); else if (m.to.some(t => t.name === n)) unans.push(m);
+    }
+    lat.sort((a, b) => a - b);
+    return { n, in: inbound.length, out: ms.filter(m => m.from === n).length, senders: new Set(inbound.map(m => m.from)).size, med: lat.length ? lat[lat.length >> 1] : null, replied: lat.length, unans };
+  }).filter(s => s.in || s.out).sort((a, b) => b.in - a.in).slice(0, 20);
+  $("flow").innerHTML = `<table class="tbl"><thead><tr><th>agent</th><th class="r" title="messages received in the window">in</th><th class="r" title="distinct senders">from</th><th class="r">out</th><th class="r" title="median time to the first message back to that sender">reply</th><th title="direct messages with no later message back to the sender">unanswered</th></tr></thead><tbody>`
+    + stats.map(s => `<tr><td>${agentLink(s.n)}</td><td class="r num">${s.in}</td><td class="r num">${s.senders}</td><td class="r num">${s.out}</td><td class="r num" title="${s.replied} of ${s.in} answered">${s.med == null ? "–" : dur(s.med)}</td><td>${s.unans.length ? `<span class="flag warn" title="${esc(s.unans.slice(-5).map(m => clock(m.ts) + " " + m.from + ": " + m.text.slice(0, 80)).join("\n"))}">${s.unans.length} waiting</span>` : ""}</td></tr>`).join("") + `</tbody></table>`;
+}
+
+function renderNow() {
+  const t = nowS(), live = agentsNow.filter(a => a.state !== "offline" && (!projSel() || Object.keys(a.projects || {}).some(p => under(p, projSel()))));
+  $("nowsub").textContent = `${live.filter(a => a.state === "busy").length} busy, ${live.filter(a => a.state === "idle").length} idle (from /agents, ${clock(t)})`;
+  const rows = live.map(a => {
+    const L = M.lanes.get(a.name), st = L ? stateAt(L, t) : null, tool = L ? L.tools[L.tools.length - 1] : null, since = st ? t - st.since : null;
+    const sinceTool = tool ? t - tool.ts : null, lastIn = L ? L.recv[L.recv.length - 1] : null, lastOut = L ? L.sent[L.sent.length - 1] : null;
+    const flags = [];
+    if (a.state === "busy" && sinceTool != null && sinceTool > 900) flags.push(`<span class="flag warn" title="busy, but its last tool call was ${dur(sinceTool)} ago">silent ${dur(sinceTool)}</span>`);
+    if (a.state === "idle" && lastIn && (!lastOut || lastOut.ts < lastIn.ts)) flags.push(`<span class="flag warn" title="last message in: ${esc(lastIn.from)} at ${clock(lastIn.ts)}: ${esc(lastIn.text.slice(0, 120))}">idle, owes a reply to ${esc(lastIn.from)}</span>`);
+    if (a.reachable && a.reachable !== "yes") flags.push(`<span class="flag off">${esc(a.reachable)}</span>`);
+    if (a.state === "idle" && since != null && since > 3600) flags.push(`<span class="flag off">idle ${dur(since)}</span>`);
+    return { a, html: `<tr><td><span class="dot ${a.state}" style="display:inline-block;margin-right:6px"></span>${agentLink(a.name)}</td><td><span class="flag ${a.state}">${a.state}</span>${since != null ? `<span class="sub">${dur(since)}</span>` : ""}</td>`
+      + `<td class="r num" title="${tool ? esc(tool.tool + ": " + (tool.desc || tool.target).slice(0, 200)) : ""}">${sinceTool != null ? dur(sinceTool) : "–"}</td><td>${flags.join("")}</td><td>${Object.keys(a.projects || {}).map(projLink).join("")}</td></tr>`, k: flags.length * 10 + (a.state === "busy") };
+  }).sort((x, y) => y.k - x.k || x.a.name.localeCompare(y.a.name));
+  $("nowtbl").innerHTML = rows.length ? `<table class="tbl"><thead><tr><th>agent</th><th>state · for</th><th class="r">last tool</th><th>attention</th><th>projects</th></tr></thead><tbody>${rows.map(r => r.html).join("")}</tbody></table>` : `<p class="empty">No live agents.</p>`;
+}
+
+function renderLog(w0, w1) {
+  const q = $("lq").value.trim().toLowerCase(), items = [];
+  for (const L of M.lanes.values()) {
+    if (!inProj(L) || !focused(L.name)) continue;
+    for (const e of L.tools) if (e.ts >= w0 && e.ts <= w1 && (!fileSel || e.files.some(f => f.key === fileSel))) items.push({ ts: e.ts, who: L.name, k: e.kind, label: e.tool, text: e.desc || e.target });
+    if (fileSel) continue;
+    for (const m of L.sent) if (m.ts >= w0 && m.ts <= w1) items.push({ ts: m.ts, who: L.name, k: "msg", label: "→ " + (m.reach.join(", ") || m.to.map(t => t.name).join(", ")), text: m.text });
+    for (const p of L.prompts) if (p.ts >= w0 && p.ts <= w1) items.push({ ts: p.ts, who: L.name, k: "prompt", label: p.wake ? "woken" : "prompt", text: "" });
+  }
+  let list = items.filter(i => !q || (i.text + " " + i.label + " " + i.who).toLowerCase().includes(q)).sort((a, b) => b.ts - a.ts);
+  const total = list.length; list = list.slice(0, 400);
+  $("logsub").textContent = `${total} entries${total > 400 ? " (newest 400)" : ""}${focus.size ? " · " + [...focus].join(", ") : ""}${fileSel ? " · touching " + fileTitle(fileSel) : ""}`;
+  $("log").innerHTML = list.map(i => `<li><span class="t" title="${dayOf(i.ts)} ${clock(i.ts, true)}">${clock(i.ts)}</span><span class="w">${agentLink(i.who)}</span><span class="x" title="${esc(i.text.slice(0, 600))}"><span class="k k-${i.k}" title="${esc(i.label)}">${esc(i.label.length > 40 ? i.label.slice(0, 38) + "…" : i.label)}</span>${esc(i.text.slice(0, 300))}</span></li>`).join("") || `<li class="sub">nothing</li>`;
+}
+
+function renderChips() {
+  const c = [...focus].map(n => `<span class="chip" data-unfocus="${esc(n)}" title="stop focusing">${esc(n)} ×</span>`);
+  if (pair) c.push(`<span class="chip" data-unpair title="stop tracing">${esc(pair[0])} → ${esc(pair[1])} ×</span>`);
+  if (fileSel) c.push(`<span class="chip" data-unfile title="clear file">${esc(fileTitle(fileSel))} ×</span>`);
+  $("chips").innerHTML = c.length ? `<span class="sub">focus:</span>` + c.join("") : "";
+}
+
+$("legend").innerHTML = [
+  `<span><svg width="22" height="12"><rect x="1" y="1" width="20" height="10" rx="2" fill="var(--busy)" fill-opacity=".3" stroke="var(--busy)" stroke-opacity=".5"/></svg>busy (lane color)</span>`,
+  `<span><svg width="22" height="12"><defs><pattern id="hl" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5" stroke="var(--warn)" stroke-width="1.6" opacity=".6"/></pattern></defs><rect x="1" y="1" width="20" height="10" fill="url(#hl)"/></svg>busy, no tool call for 10m+</span>`,
+  ...KINDS.map(k => `<span><svg width="8" height="12"><line x1="4" x2="4" y1="1" y2="11" stroke="var(--k-${k})" stroke-width="2"/></svg>${k}</span>`),
+  `<span><svg width="10" height="10"><path d="M1 9L9 9L5 3Z" fill="var(--ink)"/></svg>prompt</span>`,
+  `<span><svg width="10" height="10"><path d="M1 9L9 9L5 3Z" fill="var(--panel)" stroke="var(--ink)"/></svg>woken prompt</span>`,
+  `<span><svg width="10" height="10"><path d="M5 1L9 5L5 9L1 5Z" fill="var(--busy)"/></svg>wake sent</span>`,
+  `<span><svg width="22" height="12"><path d="M2 2Q8 6 2 10" fill="none" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/><circle cx="2" cy="2" r="2" fill="var(--muted)"/></svg>message (sender → receiver)</span>`,
+  `<span class="sub">click a name's row to focus it · the name opens the console</span>`].join("");
+
+// ---------- interaction: crosshair, drag-to-zoom, pin, tooltips ----------
+const tipEl = $("tip");
+function showTip(ev, html) { tipEl.innerHTML = html; tipEl.hidden = false;
+  const r = tipEl.getBoundingClientRect(); let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = Math.max(8, ev.clientX - r.width - 14); if (y + r.height > innerHeight - 8) y = Math.max(8, ev.clientY - r.height - 14);
+  tipEl.style.left = x + "px"; tipEl.style.top = y + "px"; }
+document.addEventListener("pointermove", ev => {
+  const el = ev.target.closest && ev.target.closest("[data-i]");
+  if (el) showTip(ev, tips[Number(el.dataset.i)]); else tipEl.hidden = true;
+});
+const scaleOf = svg => svg.dataset.scale === "all" ? [M.t0, M.t1] : winNow();
+const tAt = (svg, clientX) => { const r = svg.getBoundingClientRect(), [a, b] = scaleOf(svg); return a + (clientX - r.left) / r.width * (b - a); };
+let raf = 0;
+function drawCross() {
+  const [w0, w1] = winNow();
+  for (const svg of document.querySelectorAll(".tsvg")) {
+    const width = svg.clientWidth || W, [a, b] = scaleOf(svg);
+    const xh = svg.querySelector(".xh"); if (xh) { xh.hidden = hoverT == null; if (hoverT != null) { const x = X(hoverT, a, b, width); xh.setAttribute("x1", x); xh.setAttribute("x2", x); } }
+    const pn = svg.querySelector(".pin"); if (pn) { pn.hidden = pinT == null || pinT < w0 || pinT > w1; if (pinT != null) { const x = X(pinT, a, b, width); pn.setAttribute("x1", x); pn.setAttribute("x2", x); } }
+  }
+}
+let drag = null;
+for (const svg of document.querySelectorAll(".tsvg")) {
+  svg.addEventListener("pointermove", ev => {
+    if (!M) return;
+    const t = tAt(svg, ev.clientX);
+    hoverT = svg.dataset.scale === "all" ? null : t;
+    if (drag && drag.svg === svg) {
+      const r = svg.getBoundingClientRect(), x0 = Math.min(drag.x, ev.clientX) - r.left, x1 = Math.max(drag.x, ev.clientX) - r.left;
+      drag.moved = drag.moved || Math.abs(ev.clientX - drag.x) > 5;
+      const sel = svg.querySelector(".selr") || (() => { const s = document.createElementNS("http://www.w3.org/2000/svg", "rect"); s.setAttribute("class", "selr"); s.setAttribute("y", 0); s.setAttribute("height", svg.getAttribute("height")); svg.append(s); return s; })();
+      sel.hidden = false; sel.setAttribute("x", x0); sel.setAttribute("width", x1 - x0);
+    }
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { drawCross(); renderSnap(); });
+  });
+  svg.addEventListener("pointerleave", () => { hoverT = null; cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { drawCross(); renderSnap(); }); });
+  svg.addEventListener("pointerdown", ev => { if (!M || ev.button) return; drag = { svg, x: ev.clientX, t: tAt(svg, ev.clientX), moved: false }; svg.setPointerCapture(ev.pointerId); });
+  svg.addEventListener("pointerup", ev => {
+    if (!drag || drag.svg !== svg) return;
+    const t = tAt(svg, ev.clientX), d = drag; drag = null;
+    const sel = svg.querySelector(".selr"); if (sel) sel.hidden = true;
+    if (d.moved) { const a = Math.min(d.t, t), b = Math.max(d.t, t); if (b - a > 30) setWin(a, b); return; }
+    if (svg.dataset.scale === "all") { const [w0, w1] = winNow(), half = (w1 - w0) / 2; setWin(t - half, t + half); return; }
+    pinT = pinT != null && Math.abs(X(pinT, ...winNow()) - X(t, ...winNow())) < 6 ? null : t; drawCross(); renderSnap();
+  });
+  svg.addEventListener("dblclick", () => { win = null; pinT = null; render(); });
+}
+// the zoom window: at least 60 s wide, never wider than the data, slid (not squeezed) to stay inside it
+function setWin(a, b) {
+  const w = Math.max(60, Math.min(b - a, M.t1 - M.t0)), s = Math.min(Math.max(a, M.t0), M.t1 - w);
+  win = [s, s + w]; render();
+}
+function zoomBy(f, shift = 0) { const [a, b] = winNow(), c = (a + b) / 2 + shift * (b - a), h = (b - a) / 2 * f; setWin(c - h, c + h); }
+$("zout").onclick = () => zoomBy(2);
+$("pl").onclick = () => zoomBy(1, -0.5);
+$("pr").onclick = () => zoomBy(1, 0.5);
+$("ranges").addEventListener("click", ev => { const b = ev.target.closest("[data-r]"); if (!b) return; range = Number(b.dataset.r); setPref("an.range", String(range)); win = null; render(); });
+for (const id of ["showoff", "wonly", "ovl", "proj"]) $(id).addEventListener("change", render);
+let filterRaf = 0;  // its own frame: a pointermove in the same frame mustn't cancel the filtered render
+for (const id of ["fq", "lq"]) $(id).addEventListener("input", () => { cancelAnimationFrame(filterRaf); filterRaf = requestAnimationFrame(render); });
+document.addEventListener("click", ev => {
+  if (ev.target.closest("a")) return;  // names and projects navigate to the console
+  const f = ev.target.closest("[data-focus]"), u = ev.target.closest("[data-unfocus]"), p = ev.target.closest("[data-pair]"), fl = ev.target.closest("[data-file]");
+  if (f) { const n = f.dataset.focus; focus.has(n) ? focus.delete(n) : focus.add(n); if (focus.has(n) && n !== "human") paneOpen("agent", n); render(); }
+  else if (u) { focus.delete(u.dataset.unfocus); render(); }
+  else if (ev.target.closest("[data-unpair]")) { pair = null; render(); }
+  else if (ev.target.closest("[data-unfile]")) { fileSel = ""; render(); }
+  else if (p) { const [a, b] = p.dataset.pair.split(" "); pair = pair && pair[0] === a && pair[1] === b ? null : [a, b]; render(); $("p-time").scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }
+  else if (fl) { fileSel = fileSel === fl.dataset.file ? "" : fl.dataset.file; if (fileSel) paneOpen("file", fileSel); render(); }
+});
+let rz = 0; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 120); });
+
+
+// ---------- graph: who talks to whom, laid out by one of LAYOUTS ----------
+// Positions: savedPositions() / writePositions() (analytics-page.js), shared with analytics3d.html: both views share the arrangement and the pins.
+const G = { pos: savedPositions(), sig: "", nodes: [], edges: [], temp: 0, targets: new Map(), raf: 0, drag: null, lastDown: "", lastAt: 0, W: 600, H: 480, kind: pref("an.glayout", "fr") };
+if (!LAYOUTS.some(l => l[0] === G.kind)) G.kind = "fr";
+function saveGraph() {
+  for (const a of G.nodes) G.pos.set(a.name, { x: a.px / G.W, y: a.py / G.H, pinned: a.pinned });
+  writePositions(G.pos);
+}
+// run (or re-run) the current layout: iterative ones heat up to `heat` px per step, the others get fresh targets
+function relayout(heat) {
+  if (ITERATIVE.has(G.kind)) G.temp = Math.max(G.temp, heat);
+  else G.targets = layoutTargets(G.kind, G.nodes, G.edges, G.W, G.H);
+  graphLoop();
+}
+function graphLoop() {
+  cancelAnimationFrame(G.raf);
+  const frame = () => {
+    let moved = 0;
+    if (ITERATIVE.has(G.kind)) for (let i = 0; i < 3; i++) { moved = layoutStep(G.kind, G.nodes, G.edges, G.W, G.H, G.temp, G.drag?.node); G.temp *= 0.95; }
+    else for (const a of G.nodes) {  // glide toward the targets
+      const t = G.targets.get(a.name); if (!t || a.pinned || a === G.drag?.node) continue;
+      const dx = (t[0] - a.px) * 0.18, dy = (t[1] - a.py) * 0.18; a.px += dx; a.py += dy; moved = Math.max(moved, Math.hypot(dx, dy));
+    }
+    drawGraphPositions();
+    if (ITERATIVE.has(G.kind) ? G.temp > 0.25 && moved > 0.05 : moved > 0.05) G.raf = requestAnimationFrame(frame);
+    else { G.raf = 0; G.temp = 0; saveGraph(); }
+  };
+  G.raf = requestAnimationFrame(frame);
+}
+function drawGraphPositions() {
+  for (const a of G.nodes) a.el?.setAttribute("transform", `translate(${a.px.toFixed(1)},${a.py.toFixed(1)})`);
+  for (const e of G.edges) if (e.el) { e.el.setAttribute("x1", e.na.px.toFixed(1)); e.el.setAttribute("y1", e.na.py.toFixed(1)); e.el.setAttribute("x2", e.nb.px.toFixed(1)); e.el.setAttribute("y2", e.nb.py.toFixed(1)); }
+}
+function renderGraph(w0, w1) {
+  const svg = $("graphsvg");
+  G.W = svg.clientWidth || 600; G.H = G.W < 600 ? 380 : 480; svg.setAttribute("height", G.H);
+  const d = graphData(w0, w1, $("gproj").checked, $("ghuman").checked), maxA = Math.max(1, ...d.names.map(n => d.act.get(n) || 0));
+  const maxW = Math.max(1, ...d.edges.map(e => e.w));
+  const old = new Map(G.nodes.map(a => [a.name, a]));
+  G.nodes = d.names.map(name => {
+    const prev = old.get(name), saved = G.pos.get(name), h = fnv(name);
+    const a = { name, kind: name.startsWith("/") ? "project" : name === "human" ? "human" : "agent", act: d.act.get(name) || 0, stat: d.stat.get(name) || { tools: 0, sent: 0, recv: 0 },
+      px: prev ? prev.px / prev.W * G.W : saved ? saved.x * G.W : G.W * (0.2 + 0.6 * (h % 1000) / 1000), py: prev ? prev.py / prev.H * G.H : saved ? saved.y * G.H : G.H * (0.2 + 0.6 * ((h >>> 10) % 1000) / 1000),
+      pinned: saved?.pinned ?? prev?.pinned ?? false, fresh: !prev && !saved };
+    a.r = a.kind === "project" ? 6 + 8 * Math.sqrt(a.act / maxA) : 5 + 15 * Math.sqrt(a.act / maxA); a.W = G.W; a.H = G.H;
+    return a;
+  });
+  const byName = new Map(G.nodes.map(a => [a.name, a]));
+  G.edges = d.edges.map(e => ({ ...e, na: byName.get(e.a), nb: byName.get(e.b) }));
+  // new nodes start next to a placed neighbor, so a re-render doesn't scatter the layout
+  for (const a of G.nodes) if (a.fresh) { const e = G.edges.find(e => (e.na === a && !e.nb.fresh) || (e.nb === a && !e.na.fresh)); if (e) { const o = e.na === a ? e.nb : e.na, h = fnv(a.name); a.px = o.px + 30 * Math.cos(h); a.py = o.py + 30 * Math.sin(h); } }
+  const sig = G.kind + "|" + G.nodes.map(a => a.name).join(",") + "|" + G.edges.map(e => e.a + e.b + e.w).join(",");
+  const nMsg = G.edges.reduce((s, e) => s + e.w, 0), nPinned = G.nodes.filter(a => a.pinned).length;
+  $("gsub").textContent = G.nodes.length ? `${G.nodes.filter(a => a.kind === "agent").length} agents · ${G.edges.length} pairs · ${nMsg} messages in the window${nPinned ? ` · ${nPinned} pinned` : ""}` : "";
+  $("gfree").disabled = !nPinned;
+  if (!G.nodes.length) { svg.innerHTML = `<text x="14" y="24" style="fill:var(--muted)">No agents active in this window.</text>`; return; }
+  const dimN = a => focus.size && !focus.has(a.name), dimE = e => pair ? !((e.a === pair[0] && e.b === pair[1]) || (e.a === pair[1] && e.b === pair[0])) : focus.size && !focus.has(e.a) && !focus.has(e.b);
+  let h = "";
+  for (const e of G.edges) {
+    const c = colorOf(e.ab >= e.ba ? e.a : e.b);
+    h += `<line class="ge" stroke="${c}" stroke-width="${(1 + 7 * Math.sqrt(e.w / maxW)).toFixed(1)}" stroke-opacity="${dimE(e) ? 0.08 : 0.5}" ${tip(`<b>${esc(e.a)}</b> ↔ <b>${esc(e.b)}</b>: ${e.w} messages\n${esc(e.a)} → ${esc(e.b)}: ${e.ab}\n${esc(e.b)} → ${esc(e.a)}: ${e.ba}`)}/>`;
+  }
+  for (const a of G.nodes) {
+    const c = colorOf(a.name), s = a.stat, label = a.kind === "project" ? `<a href="${esc(projHref(a.name))}"><text x="0" y="${a.r + 13}" text-anchor="middle" style="fill:var(--muted)">${esc(a.name)}</text></a>`
+      : a.kind === "human" ? `<text x="0" y="${a.r + 13}" text-anchor="middle" style="fill:var(--human)">human</text>`
+      : `<a href="${esc(agentHref(a.name))}"><text x="0" y="${a.r + 13}" text-anchor="middle">${esc(a.name)}</text></a>`;
+    const shape = a.kind === "project" ? `<rect x="${-a.r}" y="${-a.r}" width="${2 * a.r}" height="${2 * a.r}" rx="3" fill="${c}" fill-opacity=".35" stroke="${c}" stroke-width="1.5"` : `<circle r="${a.r.toFixed(1)}" fill="${c}" fill-opacity=".85" stroke="var(--panel)" stroke-width="1.5"`;
+    h += `<g class="gn${a.pinned ? " pinned" : ""}" data-node="${esc(a.name)}"${dimN(a) ? ' opacity=".25"' : ""}>${shape} ${tip(`<b>${esc(a.name)}</b> <span class="m">${a.pinned ? "pinned" : "free"}</span>\n${a.kind === "project" ? `${s.recv} messages to the project` : `${s.tools} tool calls · ${s.sent} sent · ${s.recv} received`}\n<span class="m">click: ${a.kind === "agent" ? "focus + details" : "details"} · drag: move and pin · right-click / double-click: ${a.pinned ? "free" : "pin"}</span>`)}/>${a.pinned ? `<circle class="pinmark" r="2.6" cx="${(a.r * 0.72).toFixed(1)}" cy="${(-a.r * 0.72).toFixed(1)}"/>` : ""}${label}</g>`;
+  }
+  svg.innerHTML = h;
+  const ge = svg.querySelectorAll(".ge"), gn = svg.querySelectorAll(".gn");
+  G.edges.forEach((e, i) => e.el = ge[i]); G.nodes.forEach((a, i) => a.el = gn[i]);
+  drawGraphPositions();
+  if (sig !== G.sig) { G.sig = sig; relayout(G.nodes.some(a => a.fresh) ? G.W / 8 : G.W / 60); }
+}
+function setPinned(a, pinned) {
+  a.pinned = pinned; saveGraph();
+  if (!pinned) relayout(G.W / 25);  // let it go where the layout takes it
+  render();
+}
+{
+  const svg = $("graphsvg"), at = ev => { const r = svg.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
+  const nodeOf = ev => { const g = ev.target.closest(".gn"); return g && G.nodes.find(a => a.name === g.dataset.node); };
+  svg.addEventListener("pointerdown", ev => {
+    if (ev.target.closest("a") || ev.button) return;
+    const node = nodeOf(ev); if (!node) return;
+    const [x, y] = at(ev); G.drag = { node, ox: node.px - x, oy: node.py - y, moved: false };
+    svg.setPointerCapture(ev.pointerId); ev.preventDefault();
+  });
+  svg.addEventListener("pointermove", ev => {
+    if (!G.drag) return;
+    const [x, y] = at(ev), a = G.drag.node;
+    a.px = Math.max(4, Math.min(G.W - 4, x + G.drag.ox)); a.py = Math.max(4, Math.min(G.H - 4, y + G.drag.oy));
+    if (!G.drag.moved) { G.drag.moved = true; a.pinned = true; a.el.classList.add("pinned"); }
+    drawGraphPositions();
+    if (ITERATIVE.has(G.kind)) { G.temp = Math.max(G.temp, 4); if (!G.raf) graphLoop(); }  // the others make room
+  });
+  // pointer capture retargets the click (and dblclick) to the svg, so node clicks are handled here, by name;
+  // the first click re-renders the svg, so the browser's own dblclick never fires: the double click is detected here too
+  svg.addEventListener("pointerup", () => {
+    if (!G.drag) return;
+    const d = G.drag, a = d.node, dbl = G.lastDown === a.name && performance.now() - G.lastAt < 450; G.drag = null;
+    G.lastDown = a.name; G.lastAt = performance.now();
+    if (d.moved) { saveGraph(); render(); return; }
+    if (dbl) { setPinned(a, !a.pinned); return; }
+    if (a.kind === "agent") { const on = !focus.has(a.name); on ? focus.add(a.name) : focus.delete(a.name); if (on) paneOpen("agent", a.name); }
+    else if (a.kind === "project") location.href = projHref(a.name);
+    render();
+  });
+  svg.addEventListener("contextmenu", ev => { const a = nodeOf(ev); if (!a) return; ev.preventDefault(); setPinned(a, !a.pinned); });
+  svg.addEventListener("click", ev => { if (!ev.target.closest("a")) ev.stopPropagation(); }, true);
+  $("greset").onclick = () => { G.pos.clear(); for (const a of G.nodes) { a.pinned = false; a.px = G.W * (0.2 + 0.6 * (fnv(a.name) % 1000) / 1000); a.py = G.H * (0.2 + 0.6 * ((fnv(a.name) >>> 10) % 1000) / 1000); } saveGraph(); relayout(G.W / 8); render(); };
+  $("gfree").onclick = () => { for (const a of G.nodes) a.pinned = false; for (const p of G.pos.values()) p.pinned = false; saveGraph(); relayout(G.W / 25); render(); };
+  const sel = $("glayout");
+  sel.innerHTML = LAYOUTS.map(([k, label]) => `<option value="${k}"${k === G.kind ? " selected" : ""}>${esc(label)}</option>`).join("");
+  sel.onchange = () => { G.kind = sel.value; setPref("an.glayout", G.kind); G.sig = ""; relayout(G.W / 10); render(); };
+  for (const id of ["gproj", "ghuman"]) $(id).addEventListener("change", () => { setPref("an." + id, $(id).checked ? "1" : "0"); render(); });
+  $("gproj").checked = pref("an.gproj", "0") === "1"; $("ghuman").checked = pref("an.ghuman", "1") === "1";
+  // the 3D view may have moved nodes: pick its positions up when coming back to this tab
+  addEventListener("storage", ev => { if (ev.key === GKEY && !G.drag) { G.pos = savedPositions(); for (const a of G.nodes) { const p = G.pos.get(a.name); if (p) { a.px = p.x * G.W; a.py = p.y * G.H; a.pinned = p.pinned; } } render(); } });
+}
+
+let paneRz = 0;
+paneResized = () => { clearTimeout(paneRz); paneRz = setTimeout(render, 150); };
+
+// ---------- timeseries: small multiples on the shared window, ~120 buckets ----------
+// Each chart: one line per agent (console colors) plus an "all agents" total. Hover = values at that bucket,
+// drag = zoom the shared window, double-click = reset, legend click = focus (the page's focus set).
+const NB = 120, TSH = 120, ML = 46, MR = 10, MT = 8, MB = 18;  // buckets; chart height and plot margins (px)
+const TS = { mode: pref("an.tsmode", "lines"), hover: null, br: null, charts: new Map(), b: null, horatio: null, horErr: "", horKey: "", horAt: 0, horBusy: false, horOff: false };
+const tsNum = v => v == null || !isFinite(v) ? "–" : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M" : Math.abs(v) >= 1e4 ? (v / 1e3).toFixed(0) + "k"
+  : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(1) + "k" : Number.isInteger(v) ? String(v) : v.toFixed(v < 10 ? 1 : 0);
+const tsPct = v => v == null || !isFinite(v) ? "–" : v.toFixed(v > 0 && v < 10 ? 1 : 0) + "%";
+const tsMB = v => v == null || !isFinite(v) ? "–" : v >= 1024 ? (v / 1024).toFixed(1) + " GB" : Math.round(v) + " MB";
+// "nice" axis top: 1, 2, 2.5 or 5 times a power of ten, at least v
+const niceTop = v => { if (!(v > 0)) return 1; const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 2.5, 5, 10].map(m => m * p).find(m => m >= v * 1.0001) || 10 * p; };
+
+// buckets for [w0, w1]: counts (sum) or sampled values (gauge: mean per bucket, held forward for `hold` seconds over gaps)
+function tsBuckets(w0, w1) {
+  const bw = (w1 - w0) / NB, bi = t => t === w1 ? NB - 1 : Math.floor((t - w0) / bw), names = new Set();
+  const sums = {}, gauges = {};
+  const sum = (chart, a, t, v = 1) => { const i = bi(t); if (i < 0 || i >= NB) return; const S = sums[chart] ??= new Map(); if (!S.has(a)) S.set(a, new Float64Array(NB)); S.get(a)[i] += v; names.add(a); };
+  const gauge = (chart, a, t, v) => { const i = bi(t); if (i < 0 || i >= NB) return; const G = gauges[chart] ??= new Map();
+    if (!G.has(a)) G.set(a, { s: new Float64Array(NB), n: new Uint32Array(NB) }); const g = G.get(a);
+    // context: the agent's fullest session in the bucket (sessions and sources interleave); CPU / RSS: the mean sample
+    if (chart === "ctx") { g.s[i] = Math.max(g.n[i] ? g.s[i] : 0, v); g.n[i] = 1; } else { g.s[i] += v; g.n[i]++; }
+    names.add(a); };
+  const keep = n => { const L = M.lanes.get(n); return !L || inProj(L); };
+  for (const L of M.lanes.values()) {
+    if (!inProj(L)) continue;
+    for (const ev of L.tools) {
+      if (ev.ts < w0 || ev.ts > w1) continue;
+      sum("tools", L.name, ev.ts);
+      if (ev.kind === "edit") sum("edits", L.name, ev.ts); else if (ev.kind === "read") sum("reads", L.name, ev.ts);
+    }
+  }
+  for (const m of M.msgs) if (m.ts >= w0 && m.ts <= w1 && keep(m.from)) sum("msgs", m.from, m.ts);
+  // gauges also look back `hold` seconds before w0 so the first buckets carry the last known value
+  const HOLD = { ctx: 1800, cpu: 60, rss: 60 }, before = {};
+  for (const u of M.usage) {
+    if (u.ts > w1 || !keep(u.agent)) continue;
+    if (u.ts >= w0 && u.dtok) sum("tokens", u.agent, u.ts, u.dtok);
+    if (!u.win) continue;
+    const pct = 100 * u.context / u.win;
+    if (u.ts < w0) { if (u.ts >= w0 - HOLD.ctx) (before.ctx ??= new Map()).set(u.agent, pct); } else gauge("ctx", u.agent, u.ts, pct);
+  }
+  for (const p of M.procs) {
+    if (p.ts > w1) break;
+    for (const [a, v] of Object.entries(p.agents)) {
+      if (!keep(a)) continue;
+      if (p.ts < w0) { if (p.ts >= w0 - HOLD.cpu) { (before.cpu ??= new Map()).set(a, v.cpu); (before.rss ??= new Map()).set(a, v.rss); } }
+      else { gauge("cpu", a, p.ts, v.cpu); gauge("rss", a, p.ts, v.rss); }
+    }
+  }
+  const out = { bw, w0, w1, names };
+  for (const [k, S] of Object.entries(sums)) out[k] = S;
+  for (const k of ["ctx", "cpu", "rss"]) {
+    const G = gauges[k] || new Map(), S = new Map(), holdB = Math.max(1, Math.ceil(HOLD[k] / bw));
+    for (const [a, v0] of before[k] || []) if (!G.has(a)) G.set(a, { s: new Float64Array(NB), n: new Uint32Array(NB) });
+    for (const [a, g] of G) {
+      const arr = new Float64Array(NB).fill(NaN);
+      let last = before[k]?.get(a), lastI = last != null ? -1 : -Infinity;
+      for (let i = 0; i < NB; i++) {
+        if (g.n[i]) { arr[i] = g.s[i] / g.n[i]; last = arr[i]; lastI = i; }
+        else if (last != null && i - lastI <= holdB && w0 + i * bw <= nowS()) arr[i] = last;
+      }
+      if (arr.some(x => !isNaN(x))) { S.set(a, arr); names.add(a); }
+    }
+    out[k] = S;
+  }
+  return out;
+}
+// total over agents per bucket: sum (NaN where nobody has a value) or mean of the agents that have one
+function tsTotal(S, how) {
+  const t = new Float64Array(NB).fill(how === "sum0" ? 0 : NaN), n = new Uint32Array(NB);
+  for (const arr of S.values()) for (let i = 0; i < NB; i++) if (!isNaN(arr[i])) { t[i] = (isNaN(t[i]) ? 0 : t[i]) + arr[i]; n[i]++; }
+  if (how === "mean") for (let i = 0; i < NB; i++) if (n[i]) t[i] /= n[i];
+  return t;
+}
+// path through bucket centres; NaN breaks the line. ys: value -> y px
+function tsPath(arr, xs, ys) {
+  let d = "", pen = false;
+  for (let i = 0; i < NB; i++) { if (isNaN(arr[i])) { pen = false; continue; } d += (pen ? "L" : "M") + xs(i).toFixed(1) + " " + ys(arr[i]).toFixed(1); pen = true; }
+  return d;
+}
+function tsArea(top, bot, xs, ys) {  // closed band between two arrays (runs of defined values)
+  let d = "", run = [];
+  const flush = () => { if (run.length) { d += "M" + run.map(i => xs(i).toFixed(1) + " " + ys(top[i]).toFixed(1)).join("L") + "L" + run.slice().reverse().map(i => xs(i).toFixed(1) + " " + ys(bot ? bot[i] : 0).toFixed(1)).join("L") + "Z"; run = []; } };
+  for (let i = 0; i < NB; i++) if (isNaN(top[i])) flush(); else run.push(i);
+  flush(); return d;
+}
+function tsTicks(w0, w1, width) {
+  const step = STEPS.find(s => (w1 - w0) / s <= Math.max(2, width / 110)) || 172800, off = new Date().getTimezoneOffset() * 60;
+  let h = "";
+  for (let t = Math.ceil((w0 - off) / step) * step + off; t <= w1; t += step) {
+    const x = ML + (t - w0) / (w1 - w0) * (width - ML - MR);
+    h += `<line class="gl" x1="${x}" x2="${x}" y1="${MT}" y2="${TSH - MB}" opacity=".5"/><text x="${x}" y="${TSH - 5}" text-anchor="middle">${step >= 86400 || (new Date(t * 1000).getHours() === 0 && new Date(t * 1000).getMinutes() === 0) ? dayOf(t) : clock(t)}</text>`;
+  }
+  return h;
+}
+// one chart. spec: {id, title, sub, S (Map agent -> Float64Array), total, totalLabel, fmt, stack (bool: stacking allowed), max?}
+function tsChart(spec, B, order) {
+  const svgW = spec.wide ? TS.wideW : TS.width, pw = svgW - ML - MR, ph = TSH - MT - MB;
+  const xs = i => ML + (i + 0.5) / NB * pw;
+  const agents = order.filter(a => spec.S.has(a));
+  const stacked = TS.mode === "stacked" && spec.stack;
+  let top = 0;
+  const cum = new Map();
+  if (stacked) {
+    const base = new Float64Array(NB);
+    for (const a of agents) { const arr = spec.S.get(a), lo = base.slice(); for (let i = 0; i < NB; i++) if (!isNaN(arr[i])) base[i] += arr[i]; cum.set(a, [lo, base.slice()]); }
+    for (let i = 0; i < NB; i++) top = Math.max(top, base[i]);
+  } else {
+    for (const a of agents) for (const v of spec.S.get(a)) if (v > top) top = v;
+    if (spec.total) for (const v of spec.total) if (v > top) top = v;
+  }
+  top = spec.max || (spec.fmt === tsMB && top > 1024 ? niceTop(top / 1024) * 1024 : niceTop(top));  // memory: nice steps in GB
+  const ys = v => MT + ph - Math.max(0, Math.min(1, v / top)) * ph;
+  let g = "";
+  for (const f of [0, 0.5, 1]) g += `<line class="gl" x1="${ML}" x2="${svgW - MR}" y1="${ys(top * f)}" y2="${ys(top * f)}"/><text x="${ML - 5}" y="${ys(top * f) + 3}" text-anchor="end">${spec.fmt(top * f)}</text>`;
+  g += tsTicks(B.w0, B.w1, svgW);
+  // fixed: series that aren't agents (overall, machine) keep their own colors and ignore focus
+  const col = a => spec.fixed?.[a] || colorOf(a);
+  const op = a => spec.fixed || !focus.size || focus.has(a) ? 1 : 0.13, sw = a => !spec.fixed && focus.size && focus.has(a) ? 2.2 : spec.fixed ? 1.8 : 1.4;
+  let marks = "";
+  if (stacked) {
+    for (const a of agents) { const [lo, hi] = cum.get(a); marks += `<path d="${tsArea(hi, lo, xs, ys)}" fill="${col(a)}" fill-opacity="${0.75 * op(a)}" stroke="${col(a)}" stroke-opacity="${op(a)}" stroke-width=".6"/>`; }
+    if (spec.total) marks += `<path d="${tsPath(spec.total, xs, ys)}" fill="none" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"/>`;
+  } else {
+    if (spec.total) marks += `<path d="${tsArea(spec.total, null, xs, ys)}" fill="var(--ink)" fill-opacity=".07"/><path d="${tsPath(spec.total, xs, ys)}" fill="none" stroke="var(--ink)" stroke-opacity=".55" stroke-width="1.6"/>`;
+    for (const a of agents) marks += `<path d="${tsPath(spec.S.get(a), xs, ys)}" fill="none" stroke="${col(a)}" stroke-opacity="${op(a)}" stroke-width="${sw(a)}" stroke-linejoin="round"/>`;
+  }
+  TS.charts.set(spec.id, { spec, agents, B, w: svgW });
+  return `<div class="tsbox${spec.wide ? " wide" : ""}"><h3>${esc(spec.title)}<span class="sub">${spec.sub || ""}</span></h3>
+    <svg class="tsc" data-ts="${spec.id}" width="${svgW}" height="${TSH}" aria-label="${esc(spec.title)} over the window; drag to zoom">${g}${marks}
+    <line class="tsx" y1="${MT}" y2="${TSH - MB}" hidden/><rect class="tsbr" y="${MT}" height="${ph}" hidden/></svg></div>`;
+}
+const tsNote = (title, text, wide) => `<div class="tsbox${wide ? " wide" : ""}"><h3>${esc(title)}</h3><div class="note">${text}</div></div>`;
+
+// machine history from horatio (through the bus): fetched once per window size, refreshed at most once a minute
+function tsHoratio(w0) {
+  const hours = Math.min(48, Math.max(1, Math.ceil((nowS() - w0) / 3600))), key = String(hours);
+  if (TS.horOff || TS.horBusy || (TS.horKey === key && nowS() - TS.horAt < 60) || (TS.horErr && nowS() - TS.horAt < 300)) return;
+  TS.horBusy = true;
+  api(`/horatio/history?hours=${hours}`).then(r => {
+    TS.horatio = (r.records || []).map(x => ({ ts: Date.parse(x.timestamp) / 1000, cpu: x.cpu?.avg, mem: x.memory?.percent })).filter(x => isFinite(x.ts)).sort((a, b) => a.ts - b.ts);
+    TS.horErr = "";
+  }).catch(e => {
+    TS.horatio = null;
+    TS.horErr = (e.status ? `HTTP ${e.status}: ` : "") + (e.message || String(e));
+    if (e.status === 404) TS.horOff = true;  // horatio isn't configured on this bus (or it predates it): don't ask again
+    else console.warn("machine history unavailable:", TS.horErr);
+  }).finally(() => { TS.horKey = key; TS.horAt = nowS(); TS.horBusy = false; if (M) { const [a, b] = winNow(); renderTS(a, b); } });
+}
+
+function renderTS(w0, w1) {
+  if (dragging()) { renderPending = true; return; }
+  for (const b of $("tsmode").children) b.setAttribute("aria-pressed", String(b.dataset.m === TS.mode));
+  const grid = $("tsgrid");
+  // charts are drawn in pixels: one grid column's width (the grid's own track size) and the full width for the wide ones
+  const cs = getComputedStyle(grid), inner = grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  if (!grid.firstElementChild) grid.innerHTML = `<div class="tsbox"></div>`;  // a track to measure on the first render
+  TS.wideW = Math.max(240, Math.floor(inner)); TS.width = Math.max(240, Math.floor(parseFloat(cs.gridTemplateColumns.split(" ")[0]) || inner));
+  const B = tsBuckets(w0, w1);
+  TS.b = B; TS.charts.clear();
+  // agents ordered by tool calls in the window (busiest first), so stacks and legends are stable
+  const weight = a => { let s = 0; for (const k of ["tools", "msgs"]) { const arr = B[k]?.get(a); if (arr) for (const v of arr) s += v; } return s; };
+  const order = [...B.names].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b));
+  const z = () => new Map();
+  const S = k => B[k] || z();
+  const bwl = dur(B.bw);
+  $("tssub").textContent = `${NB} buckets of ${bwl} · ${order.length} agents${focus.size ? " · focus: " + [...focus].join(", ") : ""}`;
+  $("tsleg").innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;color:var(--muted)"><i style="--c:var(--ink);opacity:.55"></i>all agents</span>`
+    + order.map(a => `<span data-focus="${esc(a)}" class="${focus.size && !focus.has(a) ? "dim" : ""}" style="--c:${colorOf(a)};color:${colorOf(a)}" title="click to focus ${esc(a)}"><i></i>${esc(a)}</span>`).join("")
+    + `<span class="sub">click a name to focus · drag a chart to zoom · double-click to reset</span>`;
+  // overall: the four totals, each scaled to its own peak in the window (the tooltip has the real numbers)
+  const tot = {}; for (const k of ["tools", "edits", "tokens", "msgs"]) tot[k] = tsTotal(S(k), "sum0");
+  const OV = [["tools", "tool calls", "var(--accent)"], ["edits", "file edits", "var(--warn)"], ["tokens", "tokens out", "var(--idle)"], ["msgs", "messages", "var(--human)"]];
+  const peak = {}; for (const [k] of OV) peak[k] = Math.max(0, ...tot[k]);
+  const ovS = new Map(OV.map(([k]) => [k, tot[k].map(v => peak[k] ? 100 * v / peak[k] : 0)]));
+  let h = "";
+  {
+    const spec = { id: "overall", wide: true, title: "Overall, all agents", fmt: v => Math.round(v) + "%", S: ovS, max: 100, stack: false,
+      sub: "each line scaled to its own peak: " + OV.map(([k, l, c]) => `<b style="color:${c}">${l}</b> peak ${tsNum(peak[k])}/bucket`).join(" · "),
+      raw: tot, names: Object.fromEntries(OV.map(([k, l]) => [k, l])), fixed: Object.fromEntries(OV.map(([k, , c]) => [k, c])) };
+    h += tsChart(spec, B, OV.map(o => o[0]));
+  }
+  const specs = [
+    { id: "tools", title: "Tool calls", sub: "per bucket", S: S("tools"), total: tot.tools, fmt: tsNum, stack: true, how: "sum" },
+    { id: "edits", title: "File edits", sub: "Edit / Write / MultiEdit / NotebookEdit / apply_patch", S: S("edits"), total: tot.edits, fmt: tsNum, stack: true, how: "sum" },
+    { id: "reads", title: "File reads", sub: "Read / Grep / Glob / LS / web", S: S("reads"), total: tsTotal(S("reads"), "sum0"), fmt: tsNum, stack: true, how: "sum" },
+    { id: "tokens", title: "Tokens out", sub: "positive steps of each session's total", S: S("tokens"), total: tot.tokens, fmt: tsNum, stack: true, how: "sum" },
+    { id: "msgs", title: "Messages sent", sub: "by sender", S: S("msgs"), total: tot.msgs, fmt: tsNum, stack: true, how: "sum" },
+    { id: "ctx", title: "Context window used", sub: "fullest session per agent; all agents = mean (never stacked)", S: S("ctx"), total: tsTotal(S("ctx"), "mean"), fmt: tsPct, stack: false, how: "mean", max: 100 },
+    { id: "cpu", title: "CPU", sub: "% of one core, agent + children", S: S("cpu"), total: tsTotal(S("cpu"), "sum"), fmt: tsPct, stack: true, how: "sum" },
+    { id: "rss", title: "Memory (RSS)", sub: "agent + children", S: S("rss"), total: tsTotal(S("rss"), "sum"), fmt: tsMB, stack: true, how: "sum" },
+  ];
+  for (const sp of specs) {
+    if (!sp.S.size) { h += tsNote(sp.title, sp.id === "cpu" || sp.id === "rss" ? "no <code>procs</code> samples in this window (the bus samples every 15 s; older servers don't)" : sp.id === "ctx" ? "no <code>usage</code> events with a context size in this window" : "nothing in this window"); continue; }
+    h += tsChart(sp, B, order);
+  }
+  // machine
+  tsHoratio(w0);
+  if (TS.horOff) h += tsNote("Machine (horatio)", `machine history is off on this bus: ${esc(TS.horErr.slice(0, 160))}`);
+  else if (TS.horErr) h += tsNote("Machine (horatio)", `machine history not available from this bus (<code>/horatio/history</code>): ${esc(TS.horErr.slice(0, 160))}`);
+  else if (!TS.horatio) h += tsNote("Machine (horatio)", "loading…");
+  else {
+    const mk = () => ({ s: new Float64Array(NB), n: new Uint32Array(NB) }), c = mk(), m = mk();
+    for (const r of TS.horatio) { const i = Math.floor((r.ts - w0) / B.bw); if (i < 0 || i >= NB) continue;
+      if (isFinite(r.cpu)) { c.s[i] += r.cpu; c.n[i]++; } if (isFinite(r.mem)) { m.s[i] += r.mem; m.n[i]++; } }
+    const fin = g => Float64Array.from(g.s, (v, i) => g.n[i] ? v / g.n[i] : NaN);
+    const MS = new Map([["cpu avg", fin(c)], ["memory", fin(m)]]);
+    if ([...MS.values()].every(a => a.every(isNaN))) h += tsNote("Machine (horatio)", `no horatio records in this window (history goes back at most 48 h)`);
+    else h += tsChart({ id: "machine", title: "Machine (horatio)", sub: `<b style="color:var(--accent)">CPU avg</b> · <b style="color:var(--busy)">memory used</b>, % of the host`, S: MS, fmt: tsPct, stack: false, max: 100, how: "none", fixed: { "cpu avg": "var(--accent)", memory: "var(--busy)" } }, B, ["cpu avg", "memory"]);
+  }
+  grid.innerHTML = h;
+  tsDrawHover();
+}
+
+// hover: crosshair on every chart at the same bucket, tooltip with the hovered chart's values; drag: brush to zoom
+function tsDrawHover() {
+  for (const svg of document.querySelectorAll("svg.tsc")) {
+    const xh = svg.querySelector(".tsx"); if (!xh) continue;
+    xh.hidden = TS.hover == null;
+    if (TS.hover != null) { const w = TS.charts.get(svg.dataset.ts)?.w || TS.width, x = ML + (TS.hover + 0.5) / NB * (w - ML - MR); xh.setAttribute("x1", x); xh.setAttribute("x2", x); }
+  }
+}
+function tsTipHtml(id, i) {
+  const c = TS.charts.get(id); if (!c) return "";
+  const { spec, agents, B } = c, t0 = B.w0 + i * B.bw, t1 = t0 + B.bw;
+  const head = `<b>${esc(spec.title)}</b> <span class="sub">${clock(t0, B.bw < 60)}–${clock(t1, B.bw < 60)}</span>`;
+  const rows = [];
+  if (spec.raw) for (const a of agents) rows.push([spec.names[a], spec.fixed[a], tsNum(spec.raw[a][i]) + ` <span class="sub">(${Math.round(spec.S.get(a)[i])}% of peak)</span>`]);
+  else {
+    if (spec.total) rows.push([spec.how === "mean" ? "all agents (mean)" : "all agents", "var(--ink)", spec.fmt(spec.total[i])]);
+    const vals = agents.map(a => [a, spec.S.get(a)[i]]).filter(([, v]) => !isNaN(v) && (v || spec.how === "none" || spec.how === "mean"));
+    vals.sort((a, b) => b[1] - a[1]);
+    const shown = focus.size && !spec.fixed ? [...vals.filter(([a]) => focus.has(a)), ...vals.filter(([a]) => !focus.has(a))] : vals;
+    for (const [a, v] of shown.slice(0, 14)) rows.push([a, spec.fixed?.[a] || colorOf(a), spec.fmt(v)]);
+    if (shown.length > 14) rows.push([`+${shown.length - 14} more`, "transparent", ""]);
+    if (!shown.length) rows.push(["nothing in this bucket", "transparent", ""]);
+  }
+  return head + `<table class="tst">` + rows.map(([n, c, v]) => `<tr><td><span style="display:inline-block;width:10px;height:3px;background:${c};vertical-align:middle;margin-right:4px"></span>${esc(n)}</td><td class="n">${v}</td></tr>`).join("") + "</table>";
+}
+{
+  const grid = $("tsgrid");
+  // x in the chart's own pixels; w = its drawn width
+  const at = (svg, ev) => ev.clientX - svg.getBoundingClientRect().left, wOf = svg => TS.charts.get(svg.dataset.ts)?.w || TS.width;
+  const bucketAt = (x, w) => Math.max(0, Math.min(NB - 1, Math.floor((x - ML) / (w - ML - MR) * NB)));
+  const timeAt = (x, w) => TS.b.w0 + Math.max(0, Math.min(1, (x - ML) / (w - ML - MR))) * (TS.b.w1 - TS.b.w0);
+  grid.addEventListener("pointermove", ev => {
+    const svg = ev.target.closest("svg.tsc"); if (!svg || !TS.b) return;
+    ev.stopPropagation();  // the page's tooltip handler would hide this tooltip (it only knows [data-i] elements)
+    const x = at(svg, ev); TS.hover = bucketAt(x, wOf(svg));
+    hoverT = TS.b.w0 + (TS.hover + 0.5) * TS.b.bw;  // the main timeline's crosshair follows
+    if (TS.br && TS.br.svg === svg) {
+      TS.br.moved = TS.br.moved || Math.abs(x - TS.br.x) > 4;
+      const r = svg.querySelector(".tsbr"); r.hidden = false; r.setAttribute("x", Math.min(x, TS.br.x)); r.setAttribute("width", Math.abs(x - TS.br.x));
+    }
+    showTip(ev, tsTipHtml(svg.dataset.ts, TS.hover));
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { tsDrawHover(); drawCross(); });
+  });
+  grid.addEventListener("pointerleave", () => { TS.hover = null; hoverT = null; tipEl.hidden = true; tsDrawHover(); drawCross(); });
+  grid.addEventListener("pointerdown", ev => { const svg = ev.target.closest("svg.tsc"); if (!svg || ev.button || !TS.b) return; TS.br = { svg, x: at(svg, ev), moved: false }; svg.setPointerCapture(ev.pointerId); });
+  grid.addEventListener("pointerup", ev => {
+    if (!TS.br) return; const d = TS.br; TS.br = null;
+    const x = at(d.svg, ev), r = d.svg.querySelector(".tsbr"); if (r) r.hidden = true;
+    if (!d.moved) return;
+    const a = timeAt(Math.min(x, d.x), wOf(d.svg)), b = timeAt(Math.max(x, d.x), wOf(d.svg));
+    if (b - a > 30) setWin(a, b);
+  });
+  grid.addEventListener("dblclick", ev => { if (ev.target.closest("svg.tsc")) { win = null; pinT = null; render(); } });
+  $("tsmode").addEventListener("click", ev => { const b = ev.target.closest("[data-m]"); if (!b) return; TS.mode = b.dataset.m; setPref("an.tsmode", TS.mode); const [a, c] = winNow(); renderTS(a, c); });
+}
+
+// easter egg
+function toggleHack() { setPref("an.hack", pref("an.hack", "0") === "1" ? "0" : "1"); applyTheme(); render(); }
+$("hack").onclick = toggleHack;
+let typed = "";
+document.addEventListener("keydown", ev => {
+  if (ev.target.closest("input, select, textarea")) return;
+  typed = (typed + (ev.key.length === 1 ? ev.key.toLowerCase() : "")).slice(-15);
+  if (typed === "hack the planet") { typed = ""; toggleHack(); }
+  if (ev.key === "Escape") { focus.clear(); pair = null; fileSel = ""; pinT = null; render(); }
+});
+
+$("host").textContent = BUS_LABEL;
+load();
+// a reload mid-drag or mid-brush rebuilds what's under the pointer (the drop lands on detached nodes)
+setInterval(() => { if ($("live").checked && !document.hidden && !drag && !G.drag && !TS.br) load(); }, 15000);
+// Run after the chart's own drop handler, including releases outside it and interrupted pointer capture.
+for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) addEventListener(event, () => {
+  if (!dragging() && !renderPending) return;
+  drag = G.drag = TS.br = null;
+  render();
+});
+</script>
+</body>
+</html>
