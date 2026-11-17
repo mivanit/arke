@@ -21,5 +21,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      # Codex runs commands in a bubblewrap sandbox, which needs unprivileged user namespaces: Ubuntu 24.04 runners
+      # restrict them with AppArmor, and Docker's default seccomp/AppArmor profiles block them in the container.
+      # Only the network-less test container is loosened.
+      - name: Allow unprivileged user namespaces for Codex's sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Exercise real Claude and Codex hooks and tmux with scripted model replies
-        run: make test-mocked
+        run: make test-mocked RUN_FLAGS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined"

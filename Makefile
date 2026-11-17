@@ -5,6 +5,8 @@ NODE ?= node
 CONTAINER ?= docker
 PYTHON_VERSION ?= 3.12
 TEST_IMAGE ?= arke-test:$(PYTHON_VERSION)
+# extra `run` flags for test-mocked, e.g. to let Codex's bubblewrap sandbox create namespaces (see the CI workflow)
+RUN_FLAGS ?=
 HARNESS ?= claude
 LIVE_KEY = $(if $(filter claude,$(HARNESS)),ANTHROPIC_API_KEY,CODEX_API_KEY)
 
@@ -48,11 +50,11 @@ test-container:
 test-mocked:
 	$(CONTAINER) build --build-arg PYTHON_VERSION=$(PYTHON_VERSION) -f Dockerfile.test -t $(TEST_IMAGE) .
 	$(CONTAINER) build --build-arg TEST_IMAGE=$(TEST_IMAGE) -f Dockerfile.live -t arke-live-test .
-	$(CONTAINER) run --rm --network=none --shm-size=1g arke-live-test claude --mock-model
-	$(CONTAINER) run --rm --network=none --shm-size=1g arke-live-test codex --mock-model
-	$(CONTAINER) run --rm --network=none --shm-size=1g --entrypoint python3 arke-live-test -m tests.tui_smoke claude
-	$(CONTAINER) run --rm --network=none --shm-size=1g --entrypoint python3 arke-live-test -m tests.tui_smoke claude --native
-	$(CONTAINER) run --rm --network=none --shm-size=1g --entrypoint python3 arke-live-test -m tests.tui_smoke codex
+	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) arke-live-test claude --mock-model
+	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) arke-live-test codex --mock-model
+	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke claude
+	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke claude --native
+	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke codex
 
 # Explicit opt-in: real model calls, separate from the credential-free CI suite.
 test-live:
