@@ -459,7 +459,8 @@ class TestBrowserOrigin(test_delivery.DeliveryFixture):
             )
             response: http.client.HTTPResponse = connection.getresponse()
             assert response.status == 400
-            assert b"nested too deeply" in response.read()
+            # RecursionError ("nested too deeply") or, where the parser's stack allows 100k levels, the missing value
+            assert json.loads(response.read())["error"].startswith("bad request")
         finally:
             connection.close()
 
