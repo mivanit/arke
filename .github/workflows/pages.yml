@@ -26,16 +26,17 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Download the pinned Three.js and highlight.js files (checksummed)
         run: python3 install-service.py --assets-only
       - name: Build the demo (web/ with demo/fake-api.js in place of the bus)
         run: python3 demo/build.py _site
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
+          include-hidden-files: true  # v4+ drops dotfiles by default; keep the demo's .nojekyll
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
