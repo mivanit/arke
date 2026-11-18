@@ -1126,8 +1126,9 @@ for (const id of ["recent", "gap"]) {
 $("gfree").onclick = () => { const o = savedPositions(); for (const p of o.values()) p.pinned = false; writePositions(o); relabel(); };
 $("replan").onclick = () => { forceReplan = true; relabel(); };
 // the guide: shown until closed, "?" brings it back
-function setHelp(on) { $("help").hidden = !on; $("helpbtn").setAttribute("aria-pressed", String(on)); setPref("an.3help", on ? "1" : "0"); }
-setHelp(pref("an.3help", "1") !== "0");
+function setHelp(on, save = true) { $("help").hidden = !on; $("helpbtn").setAttribute("aria-pressed", String(on)); if (save) setPref("an.3help", on ? "1" : "0"); }
+// open on a first visit, except on a narrow screen, where it would cover most of the scene
+setHelp(pref("an.3help", matchMedia("(max-width: 700px)").matches ? "0" : "1") !== "0", false);
 $("helpbtn").onclick = () => setHelp($("help").hidden);
 $("helpx").onclick = () => setHelp(false);
 // the two planes and the labels: shown / hidden in place, no rebuild
@@ -1136,11 +1137,14 @@ for (const id of ["tsouth", "teast", "tlabels"]) {
   $(id).addEventListener("change", () => { setPref("an.3" + id, $(id).checked ? "1" : "0"); if (id === "tlabels") lab.hidden = !$(id).checked; else applyFocus(); });
 }
 lab.hidden = !$("tlabels").checked;
-// menus: one open at a time; a click elsewhere or Esc closes
+// menus: one open at a time; a click elsewhere or Esc closes. Esc with no menu open closes the guide
 const menus = [...document.querySelectorAll("details.arr")];
-for (const d of menus) d.addEventListener("toggle", () => { if (d.open) for (const o of menus) if (o !== d) o.open = false; });
+// a menu never runs off the bottom of the window: it scrolls inside the room below its own top
+const fitMenu = d => { const b = d.querySelector(":scope > div"); if (d.open && b) { b.style.maxHeight = ""; b.style.maxHeight = Math.max(120, innerHeight - b.getBoundingClientRect().top - 8) + "px"; } };
+for (const d of menus) d.addEventListener("toggle", () => { if (d.open) for (const o of menus) if (o !== d) o.open = false; fitMenu(d); });
+addEventListener("resize", () => menus.forEach(fitMenu));
 document.addEventListener("pointerdown", ev => { for (const d of menus) if (d.open && !d.contains(ev.target)) d.open = false; });
-document.addEventListener("keydown", ev => { if (ev.key !== "Escape") return; const d = menus.find(m => m.open); if (d) { d.open = false; d.querySelector("summary").focus(); } });
+document.addEventListener("keydown", ev => { if (ev.key !== "Escape") return; const d = menus.find(m => m.open); if (d) { d.open = false; d.querySelector("summary").focus(); } else if (!fp && !$("help").hidden) setHelp(false); });
 
 darkMq.addEventListener("change", () => relabel());  // after base.js applied the theme
 
@@ -1160,7 +1164,7 @@ $("crumbs").addEventListener("click", ev => { const c = ev.target.closest("[data
 $("croot").value = cityRoot;
 $("croot").addEventListener("keydown", ev => { if (ev.key === "Enter") setRoot($("croot").value); });
 $("crootgo").onclick = () => setRoot($("croot").value);
-// the path box shows only when asked for ("…"), or while a typed root is in effect
+// the path box shows only when asked for ("…"); the breadcrumbs show the root in effect
 function rootBox(on) { $("crootbox").hidden = !on; $("crootedit").setAttribute("aria-expanded", String(on)); if (on) $("croot").focus(); }
 $("crootedit").onclick = () => rootBox($("crootbox").hidden);
 $("croot").addEventListener("keydown", ev => { if (ev.key === "Escape") { rootBox(false); $("crootedit").focus(); ev.stopPropagation(); } });

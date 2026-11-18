@@ -340,7 +340,7 @@ pre code { border: 0; padding: 0; background: none; }
   .split[data-tab="overview"] .handle { display: none; } .split[data-tab="overview"] .side { margin-left: 0; }
 }
 @media (max-width: 760px) {
-  .ahead .colsgrp { display: none; }  /* the table is cards here: no columns to choose or size */
+  .ahead #cols-auto, .ahead #cols-reset { display: none; }  /* the table is cards here: no widths to set, but "choose" still picks the fields */
   .arow { flex-wrap: wrap; } .arow .atask { flex-basis: 100%; white-space: normal; text-align: left; }
   .layout { grid-template-columns: minmax(0, 1fr); }
   .tree { position: static; padding: 8px; }
@@ -1302,7 +1302,10 @@ $("colmenu").addEventListener("keydown", e => {
   else if (e.key === "Tab") closeColMenu(true);
 });
 document.addEventListener("pointerdown", e => { if (!e.target.closest("#colmenu")) closeColMenu(false); });
-addEventListener("scroll", () => closeColMenu(false), true); addEventListener("resize", () => closeColMenu(false));
+// a scroll closes the fixed menus, except the one appendFeed makes itself to keep the reader's place
+let ownScrollUntil = 0;
+const ownScroll = e => e.target === document && performance.now() < ownScrollUntil;
+addEventListener("scroll", e => { if (!ownScroll(e)) closeColMenu(false); }, true); addEventListener("resize", () => closeColMenu(false));
 // "columns" popover: a checklist of every column (the timing group as one row with its own expand box), plus reset
 function renderColPop() {
   const f = $("colpop").contains(document.activeElement) ? document.activeElement : null;
@@ -1336,7 +1339,7 @@ $("cols-pick").addEventListener("click", e => {
 });
 const closeColPop = () => { $("colpop").hidden = true; $("cols-pick").setAttribute("aria-expanded", "false"); };
 document.addEventListener("click", e => { if (!e.target.closest("#colpop, #cols-pick")) closeColPop(); });
-addEventListener("scroll", e => { if (!$("colpop").contains(e.target)) closeColPop(); }, true);  // it is fixed in place: don't let it float away from its button
+addEventListener("scroll", e => { if (!$("colpop").contains(e.target) && !ownScroll(e)) closeColPop(); }, true);  // it is fixed in place: don't let it float away from its button
 $("offline-toggle").addEventListener("click", () => { setPref("offline", pref("offline", "hide") === "hide" ? "show" : "hide"); renderAgents(); renderTree(); });
 // fit: lay the table out by content once (no wrapping), read each header's width, keep "Working on" flexible. only = one column's id.
 function fitCols(only) {
@@ -1666,7 +1669,7 @@ function appendFeed(msgs) {
   if (!lastId) $("feed").innerHTML = "";
   const fresh = lastId > 0;
   const docH = document.documentElement.scrollHeight;
-  queueMicrotask(() => { if (fresh && scrollY > 0) scrollBy(0, document.documentElement.scrollHeight - docH); });
+  queueMicrotask(() => { if (fresh && scrollY > 0) { ownScrollUntil = performance.now() + 400; scrollBy(0, document.documentElement.scrollHeight - docH); } });
   $("feed").insertAdjacentHTML("afterbegin", msgs.slice().reverse().map(m => msgLi(m, fresh)).join(""));
   lastId = msgs[msgs.length - 1].id;  // only once drawn: a batch that failed to render is fetched again
   if (!feedOldest) { feedOldest = msgs[0].id; $("feed-older").hidden = msgs.length < LOG_PAGE; }
