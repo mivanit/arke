@@ -1983,7 +1983,7 @@ async function demoSite() {
     assert.equal(await p.getAttribute('#analytics3d', 'href'), 'analytics3d.html', 'the 3D page is linked from the console');
     // a header sorts, reverses, then returns to the default order; a hidden column says so and can be undone
     const sortOf = () => p.getAttribute('th[data-col="tokens"]', 'aria-sort');
-    for (const want of ['descending', 'ascending', 'none']) { await p.click('th[data-col="tokens"] .sortb'); assert.equal(await sortOf(), want); }
+    for (const want of ['descending', 'ascending', 'none']) { await p.click('th[data-col="tokens"]'); assert.equal(await sortOf(), want); }
     assert.equal(await p.evaluate(() => localStorage.getItem('ab.sort')), 'null');
     await p.click('th[data-col="tokens"]', { button: 'right' }); await p.click('#colmenu [data-act="desc"]');
     assert.equal(await sortOf(), 'descending', 'the header menu sorts');
