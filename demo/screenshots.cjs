@@ -20,7 +20,7 @@ const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', md: '
     const shots = [
       ['console', '', () => document.querySelectorAll('#agents tr').length >= 6 && document.querySelectorAll('#feed .msg').length > 10, () => {}],
       ['analytics', 'analytics.html', () => /CPU avg/.test(document.body.textContent), () => {}],
-      ['analytics3d', 'analytics3d.html', () => window.ab3d?.files().length > 20 && /events/.test(document.getElementById('status').textContent), () => document.getElementById('help')?.click()],
+      ['analytics3d', 'analytics3d.html', () => window.ab3d?.files().length > 20 && /events/.test(document.getElementById('status').textContent), () => document.getElementById('helpx').click()],
     ];
     // The demo follows the clock, and at some moments nobody is busy: step back in time until a few agents are.
     const open = async back => {

@@ -285,8 +285,8 @@ async function analyticsFiles() {
   assert.equal(localFile(remote.key), false);
   const painted = [];
   Object.assign(ctx, {
-    document: { createElement: () => ({ getContext: () => ({ fillRect() {}, fillText: text => painted.push(text) }) }) },
-    THREE: { CanvasTexture: class {} }, requestRender() {},
+    document: { documentElement: {}, createElement: () => ({ getContext: () => ({ fillRect() {}, fillText: text => painted.push(text) }) }) },
+    THREE: { CanvasTexture: class {} }, requestRender() {}, getComputedStyle: () => ({ getPropertyValue: () => '#fff' }),
     api: async url => { requests.push(url); return { text: 'LOCAL CONTENTS' }; },
   });
   vm.runInContext(extract(html, 'const near = new Map()', 'function sideTexture('), ctx);
@@ -331,7 +331,7 @@ async function analyticsRoofRefresh() {
       canvas.getContext = () => ({ fillRect() { canvas.painted.length = 0; }, fillText(text) { canvas.painted.push(text); } });
       return canvas;
     } },
-    THREE: { CanvasTexture: class { constructor(image) { this.image = image; } } }, requestRender() {},
+    THREE: { CanvasTexture: class { constructor(image) { this.image = image; } } }, requestRender() {}, getComputedStyle: () => ({ getPropertyValue: () => '#fff' }),
     api: url => new Promise(resolve => requests.push({ url, resolve })),
   });
   vm.runInContext(read('analytics-shared.js')
@@ -1408,14 +1408,14 @@ async function analytics3dResilience() {
     assert.equal(await p.$('#mix'), null);
     const asks = sizeAsks, reads = () => p.evaluate(() => ab3d.state().lines.find(l => l[0] === 'reads')[2]);
     assert.equal(await reads(), false);
-    await p.click('#tread');
+    await p.click('#showmenu > summary'); await p.click('#tread');
     assert.equal(await reads(), true, 'checking reads shows the read lines');
     await p.waitForTimeout(300);
     assert.equal(sizeAsks, asks, 'toggling reads does not rebuild the scene');
     await p.evaluate(() => document.getElementById('proj').dispatchEvent(new Event('change')));
     await p.waitForTimeout(300);
     assert(sizeAsks > asks, 'a rebuild does ask for the sizes again (so the check above can fail)');
-    await p.click('details.arr > summary');
+    await p.click('#arrmenu > summary');
     const cam = await p.evaluate(() => JSON.stringify(ab3d.cam())), roots = await p.isChecked('#roots');
     await p.focus('#cores'); await p.keyboard.type('12');
     await p.focus('#acity'); await p.keyboard.press('r');
@@ -1631,8 +1631,8 @@ async function phoneWidth() {
     assert.deepEqual(await p.evaluate(() => [...new Set([...document.querySelectorAll('#agents td.wide')].map(td => getComputedStyle(td).display))]), ['none'],
       'the wide columns (Tokens, Session, Times, Dir, Where, Projects) are hidden in the phone cards');
     await p.goto('http://arke-review.test/analytics3d');
-    await p.click('details.arr > summary');
-    const box = await p.evaluate(() => document.querySelector('details.arr[open] > div').getBoundingClientRect().toJSON());
+    await p.click('#arrmenu > summary');
+    const box = await p.evaluate(() => document.querySelector('#arrmenu[open] > div').getBoundingClientRect().toJSON());
     assert(box.left >= 0 && box.right <= 390, `the arrange menu is on screen: ${box.left}..${box.right}`);
   } finally { await browser.close(); }
   console.log('ok: the project compose row, markdown tables and the 3D arrange menu fit a phone');
@@ -1980,6 +1980,20 @@ async function demoSite() {
     await p.waitForFunction(() => document.querySelectorAll('#agents tr').length >= 6 && document.querySelectorAll('#feed .msg').length > 10);
     assert.match(await p.textContent('#agent-scope'), /1 offline/, 'the agent that ended is counted as offline');
     assert.equal(await p.getAttribute('#analytics', 'href'), 'analytics.html');
+    assert.equal(await p.getAttribute('#analytics3d', 'href'), 'analytics3d.html', 'the 3D page is linked from the console');
+    // a header sorts, reverses, then returns to the default order; a hidden column says so and can be undone
+    const sortOf = () => p.getAttribute('th[data-col="tokens"]', 'aria-sort');
+    for (const want of ['descending', 'ascending', 'none']) { await p.click('th[data-col="tokens"] .sortb'); assert.equal(await sortOf(), want); }
+    assert.equal(await p.evaluate(() => localStorage.getItem('ab.sort')), 'null');
+    await p.click('th[data-col="tokens"]', { button: 'right' }); await p.click('#colmenu [data-act="desc"]');
+    assert.equal(await sortOf(), 'descending', 'the header menu sorts');
+    await p.click('th[data-col="tokens"]', { button: 'right' }); await p.click('#colmenu [data-act="hide"]');
+    assert.equal(await p.$('th[data-col="tokens"]'), null);
+    assert.match(await p.textContent('#cols-pick'), /1 hidden/);
+    assert.equal(await p.evaluate(() => localStorage.getItem('ab.sort')), 'null', 'no sort is left on a column that is not shown');
+    await p.click('#toast button');
+    assert(await p.$('th[data-col="tokens"]'), 'undo brings the column back');
+    assert.equal(await p.textContent('#cols-pick'), 'choose');
     await p.fill('#to', 'trainer'); await p.fill('#text', 'a message typed into the demo');
     await p.click('#compose button[type="submit"]');
     await p.waitForFunction(() => document.querySelector('#feed .msg')?.textContent.includes('a message typed into the demo'));
@@ -1997,6 +2011,18 @@ async function demoSite() {
     p = await open('analytics3d.html');
     await p.waitForFunction(() => window.ab3d?.files().length > 20 && /events/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
     assert.equal(await p.textContent('#conn'), '', 'the 3D page reports no errors');
+    // the toolbar: the guide closes and comes back, a plane can be switched off, facing it switches it back on, Esc closes a menu
+    const planes = () => p.evaluate(() => ab3d.state().lines.find(l => l[0] === 'git')?.[2]);
+    await p.click('#helpx'); assert.equal(await p.isVisible('#help'), false);
+    await p.keyboard.press('?'); assert.equal(await p.isVisible('#help'), true, '? brings the guide back');
+    assert.equal(await planes(), true);
+    await p.click('#showmenu > summary'); await p.click('#teast');
+    assert.equal(await planes(), false, 'the git plane and its lines can be switched off');
+    await p.keyboard.press('Escape');
+    assert.equal(await p.evaluate(() => document.getElementById('showmenu').open), false, 'Esc closes the menu');
+    await p.click('[data-preset="east"]');
+    assert.equal(await p.isChecked('#teast'), true, 'the git view shows the git plane again');
+    assert.equal(await p.isVisible('#fpspeedl'), false, 'the walking speed shows only while walking');
     await clean(p, '3D analytics');
   } finally { await browser.close(); fs.rmSync(out, { recursive: true, force: true }); }
   console.log('ok: the static demo draws the console, both analytics pages and the 3D city from the fake bus, from a subpath');

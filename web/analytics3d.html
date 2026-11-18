@@ -22,7 +22,8 @@ a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible
 .top .host { font: 12px var(--mono); color: var(--muted); }
 .grow { flex: 1; }
 .btn, select { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
-.btn:hover { border-color: var(--accent); }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
 .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .seg { display: inline-flex; }
 .seg .btn { border-radius: 0; margin-left: -1px; }
@@ -46,15 +47,27 @@ a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible
 #labels .proj { font-size: 11.5px; }
 #labels .dir { font: 600 11px var(--mono); color: var(--muted); text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); pointer-events: auto; cursor: pointer; }
 #labels .dir:hover { color: var(--accent); }
-.bar3 { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; padding: 4px 16px 6px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
-.bar3 input[type=text] { font: 12px var(--mono); width: 22em; max-width: 100%; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 6px; }
+.bar2 .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.bar2 .vr { align-self: stretch; width: 1px; background: var(--line); }
+.cityroot { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+#crootedit { padding: 0 6px; }
+.bar2 input[type=text] { font: 12px var(--mono); width: 22em; max-width: 100%; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 6px; }
 .crumb { font-family: var(--mono); color: var(--ink); cursor: pointer; } .crumb:hover { color: var(--accent); text-decoration: underline; }
-details.arr { position: relative; } details.arr > summary { cursor: pointer; list-style: none; } details.arr[open] > div { position: absolute; z-index: 40; top: 120%; right: 0; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; display: grid; grid-template-columns: auto auto; gap: 4px 8px; box-shadow: 0 4px 16px rgba(0,0,0,.15); white-space: nowrap; }
+details.arr { position: relative; } details.arr > summary { cursor: pointer; list-style: none; } details.arr > summary::-webkit-details-marker { display: none; }
+details.arr > summary::after { content: " ▾"; color: var(--muted); } details.arr[open] > summary { border-color: var(--accent); }
+details.arr .mh { grid-column: 1 / -1; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--line); margin-top: 6px; padding-bottom: 1px; }
+details.arr .mh:first-child { margin-top: 0; } details.arr .full { grid-column: 1 / -1; } details.arr label { color: var(--ink); }
+details.arr[open] > div.menu { grid-template-columns: auto; gap: 2px; }
+details.arr[open] > div { position: absolute; z-index: 40; top: 120%; left: 0; max-height: calc(100vh - 140px); overflow: auto; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; display: grid; grid-template-columns: auto auto; gap: 4px 8px; box-shadow: 0 4px 16px rgba(0,0,0,.15); white-space: nowrap; }
 #fphud { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); font-size: 12px; background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--line); border-radius: 5px; padding: 3px 10px; color: var(--muted); pointer-events: none; }
 #labels .tick { font: 10.5px var(--sans); color: var(--muted); text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); }
 #labels .cap { font: 600 11px var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; text-shadow: 0 0 3px var(--ground), 0 0 3px var(--ground); }
-#help { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted); background: color-mix(in srgb, var(--panel) 85%, transparent);
-  border: 1px solid var(--line); border-radius: 5px; padding: 5px 9px; max-width: min(680px, calc(100% - 24px)); cursor: pointer; }
+#help { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 30px 8px 12px; max-width: min(560px, calc(100% - 24px)); max-height: calc(100% - 20px); overflow: auto; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+#help dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+#help dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; } #help dd { margin: 0; color: var(--ink); }
+#help kbd { font: 11px var(--mono); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 4px; background: var(--tint); }
+#helpx { position: absolute; top: 5px; right: 5px; padding: 0 6px; font-size: 14px; line-height: 1.3; }
 #tip { position: fixed; z-index: 100; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong);
   border-radius: 5px; padding: 6px 9px; font-size: 12px; max-width: min(460px, 92vw); box-shadow: 0 4px 16px rgba(0,0,0,.18); white-space: pre-wrap; overflow-wrap: anywhere; }
 #tip .m { color: var(--muted); }
@@ -65,16 +78,18 @@ details.arr { position: relative; } details.arr > summary { cursor: pointer; lis
 .mono { font-family: var(--mono); }
 .bar2 input[type=range] { width: 120px; vertical-align: middle; }
 .bar2 label { white-space: nowrap; }
-@media (max-width: 700px) { .top, .bar2 { padding-inline: 8px; } #help { display: none; }
-  details.arr[open] > div { position: fixed; left: 8px; right: 8px; top: auto; white-space: normal; } }
+/* the arrange menu hangs from the toolbar's right end, clear of the middle of the scene it rearranges */
+@media (min-width: 701px) { .bar2 { position: relative; } #arrmenu { position: static; } #arrmenu[open] > div { top: 100%; left: auto; right: 16px; margin-top: 4px; } }
+@media (max-width: 700px) { .top, .bar2 { padding-inline: 8px; } #help { left: 8px; bottom: 8px; }
+  details.arr[open] > div { position: fixed; left: 8px; right: 8px; top: auto; white-space: normal; grid-template-columns: auto minmax(0, 1fr); }
+  details.arr[open] > div select, details.arr[open] > div input { min-width: 0; max-width: 100%; } }
 </style>
 </head>
 <body>
 <header class="top">
-  <h1>arke 3D</h1>
+  <h1><a href="/">arke</a></h1>
   <span class="host" id="host"></span>
-  <a class="btn" id="console" href="/">&larr; console</a>
-  <a class="btn" id="an2d" href="analytics">analytics</a>
+  <nav class="nav" aria-label="Pages"><a id="console" href="/">console</a><a id="an2d" href="analytics">analytics</a><a href="analytics3d" aria-current="page">3D</a></nav>
   <span class="netstat wait" id="netstat" role="status">connecting</span>
   <span class="grow"></span>
   <span class="seg" id="ranges" role="group" aria-label="Time range">
@@ -85,50 +100,76 @@ details.arr { position: relative; } details.arr > summary { cursor: pointer; lis
   <span class="status" id="status">loading&hellip;</span>
 </header>
 <div class="conn" id="conn" role="alert"></div>
-<div class="bar2">
-  <label><input type="checkbox" id="tmsg" checked> messages</label>
-  <label><input type="checkbox" id="tedit" checked> edits</label>
-  <label><input type="checkbox" id="tread"> reads</label>
-  <label><input type="checkbox" id="tproj"> projects</label>
-  <label><input type="checkbox" id="thuman" checked> human</label>
-  <label title="Show reads as roots under the city, with see-through plots (R)"><input type="checkbox" id="roots" checked> roots</label>
-  <label title="Lines from each commit to the files it touched and to the agent that committed"><input type="checkbox" id="tgit" checked> git lines</label>
-  <span class="seg"><button class="btn" type="button" data-preset="south" title="The machine's row (cpu / memory / gpu over time) and a row per agent's processes beside it (1)">machine</button><button class="btn" type="button" data-preset="east" title="Face the git commits, a lane per repo (2)">git</button><button class="btn" type="button" data-preset="city" title="Top-down onto the city (3)">city</button><button class="btn" type="button" data-preset="up" title="Look up the agents' history from below the present (4)">up ↑</button><button class="btn" type="button" data-preset="side" title="Agents' history from the side, time left to right (5)">side</button></span>
-  <button class="btn" type="button" id="home" title="Reset the camera (0)">reset view</button>
+<div class="bar2" id="tools">
+  <span class="lbl">view</span>
+  <span class="seg" role="group" aria-label="Camera views"><button class="btn" type="button" data-preset="south" title="The machine's row (cpu / memory / gpu over time) and a row per agent's processes beside it (1)">machine</button><button class="btn" type="button" data-preset="east" title="Face the git commits, a lane per repo (2)">git</button><button class="btn" type="button" data-preset="city" title="Top-down onto the city (3)">city</button><button class="btn" type="button" data-preset="up" title="Look up the agents' history from below the present (4)">up ↑</button><button class="btn" type="button" data-preset="side" title="Agents' history from the side, time left to right (5)">side</button></span>
+  <button class="btn" type="button" id="home" title="Reset the camera (0)">reset</button>
   <button class="btn" type="button" id="fpbtn" aria-pressed="false" title="First person (F): mouse to look, WASD to move, space/E up, ctrl (or Q/C) down, shift to sprint, Esc to leave">walk</button>
-  <label id="fpspeedl" title="First-person speed (units per second; wheel while walking)">speed <input type="range" id="fpspeed" min="10" max="300" step="10"></label>
-  <details class="arr"><summary class="btn" title="Layout, sizes, gaps and scales">arrange</summary><div>
-    <label for="glayout">agent layout</label><select id="glayout" aria-label="Graph layout" title="How the agents are arranged (shared with the 2D graph)"></select>
+  <label id="fpspeedl" hidden title="First-person speed (units per second; wheel while walking)">speed <input type="range" id="fpspeed" min="10" max="300" step="10"></label>
+  <span class="vr"></span>
+  <details class="arr" id="showmenu"><summary class="btn" title="What is drawn: lines, agents, planes, labels">show</summary><div class="menu">
+    <span class="mh">lines</span>
+    <label title="Links between agents at the moment a message was sent"><input type="checkbox" id="tmsg" checked> messages</label>
+    <label title="Lines from an agent down to the roof of each file it edited"><input type="checkbox" id="tedit" checked> edits</label>
+    <label title="Lines from an agent down to each file it read"><input type="checkbox" id="tread"> reads</label>
+    <label title="Lines from each commit to the files it touched and to the agent that committed"><input type="checkbox" id="tgit" checked> git commits' files</label>
+    <span class="mh">columns</span>
+    <label title="A column for each project board, linked to the agents that posted to it"><input type="checkbox" id="tproj"> project boards</label>
+    <label title="A column for you, linked to the agents you exchanged messages with"><input type="checkbox" id="thuman" checked> human</label>
+    <span class="mh">around the agents</span>
+    <label title="The machine's cpu / memory / gpu and a row per agent's processes, on the south side"><input type="checkbox" id="tsouth" checked> machine &amp; processes</label>
+    <label title="Git commits, a lane per repo, on the east side"><input type="checkbox" id="teast" checked> git commits</label>
+    <span class="mh">city</span>
+    <label title="Reads as roots under the city, with see-through plots (R)"><input type="checkbox" id="roots" checked> roots (reads, below ground)</label>
+    <label title="Names, times and captions drawn over the scene (L)"><input type="checkbox" id="tlabels" checked> labels</label>
+  </div></details>
+  <details class="arr" id="arrmenu"><summary class="btn" title="Layout, sizes, gaps and scales">arrange</summary><div>
+    <span class="mh">agents</span>
+    <label for="glayout">layout</label><select id="glayout" aria-label="Graph layout" title="How the agents are arranged (shared with the 2D graph)"></select>
+    <button class="btn" type="button" id="gfree" title="Unpin every agent and let the layout move them">free all agents</button>
+    <span class="mh">city</span>
     <label for="recent" title="Building heights and touch lines count only this recent span (the city plan keeps the whole window)">edits in the last <b id="recentv" class="mono"></b></label><input type="range" id="recent" min="0" max="8" step="1" value="0" aria-label="Recent span">
     <label for="hscale" title="Building height: edits rise above the plot, reads sink below it as roots (one shared scale)">height scale</label><select id="hscale" aria-label="Height scale"><option value="log" selected>log</option><option value="linear">linear</option></select>
-    <label for="cores" title="CPU cores on the bus's machine: process cpu (% of one core) / cores = share of the whole machine, to line up with the machine's cpu %">bus machine cores</label><input type="number" id="cores" min="1" max="1024" step="1" style="width: 6em">
+    <button class="btn" type="button" id="replan" title="Lay the city out again from scratch (normally it keeps its plan and builds new files on empty lots)">re-plan city</button>
+    <span class="mh">machine</span>
+    <label for="pscale" title="How wide an agent's process lanes are drawn. Busiest agent: full width = the busiest agent's peak in this window (shows who is busy; not comparable with the machine's row). Share of the machine: cpu / cores and memory / total memory, the same 0-100% as the machine's row (comparable, but small agents are thin).">agents' rows scale</label><select id="pscale" aria-label="Scale of the agents' process rows"><option value="own" selected>busiest agent = full width</option><option value="machine">share of the machine</option></select>
+    <label for="cores" title="CPU cores on the bus's machine, for the share-of-the-machine scale: process cpu (% of one core) / cores. Empty = what the bus reports.">machine cores</label><input type="number" id="cores" min="1" max="1024" step="1" style="width: 11em">
+    <span class="mh">sizes</span>
     <label for="acity">city footprint</label><input type="range" id="acity" min="0.4" max="2.5" step="0.05">
     <label for="acityh">city height</label><input type="range" id="acityh" min="0.2" max="3" step="0.05">
     <label for="agraph">graph size</label><input type="range" id="agraph" min="0.4" max="2.5" step="0.05">
     <label for="atime">time height</label><input type="range" id="atime" min="80" max="600" step="10">
-    <label for="gap" title="Room between the agents' cube and every face around it: the city below and the machine / process / git planes"><b>gap, all faces</b></label><input type="range" id="gap" min="0" max="200" step="10" value="0" aria-label="Gap between the agents and all faces">
-    <span class="sub" style="grid-column: 1 / -1">plus each face's own offset:</span>
-    <label for="aoc">city (below)</label><input type="range" id="aoc" min="-60" max="200" step="5">
-    <label for="aos">machine &amp; processes</label><input type="range" id="aos" min="-30" max="200" step="5">
-    <label for="aoe">git commits</label><input type="range" id="aoe" min="-30" max="200" step="5">
-    <span class="sub" style="grid-column: 1 / -1">drag a handle (or shift-drag the city or an agent column) to move it</span>
-    <button class="btn" type="button" id="gfree" title="Unpin every agent and let the layout move them">free all agents</button>
-    <button class="btn" type="button" id="replan" title="Lay the city out again from scratch (normally it keeps its plan and builds new files on empty lots)">re-plan city</button>
-    <button class="btn" type="button" id="areset" style="grid-column: 1 / -1">reset sizes and positions</button>
+    <span class="mh">gaps around the agents</span>
+    <label for="gap" title="Room between the agents' cube and every face around it: the city below and the machine / process / git planes">all faces</label><input type="range" id="gap" min="0" max="200" step="10" value="0" aria-label="Gap between the agents and all faces">
+    <label for="aoc">+ city (below)</label><input type="range" id="aoc" min="-60" max="200" step="5">
+    <label for="aos">+ machine &amp; processes</label><input type="range" id="aos" min="-30" max="200" step="5">
+    <label for="aoe">+ git commits</label><input type="range" id="aoe" min="-30" max="200" step="5">
+    <span class="sub full">in the scene: drag a handle, or shift-drag the city or an agent column, to move it</span>
+    <button class="btn full" type="button" id="areset">reset sizes and positions</button>
   </div></details>
+  <span class="vr"></span>
+  <span class="cityroot" title="The city shows this directory and below: click a directory label in the scene to narrow, a crumb to widen">city <span id="crumbs"></span>
+    <button class="btn" type="button" id="crootedit" aria-expanded="false" title="Type a directory to show">&hellip;</button>
+    <span id="crootbox" hidden><input type="text" id="croot" placeholder="/path/to/dir" aria-label="City root directory" spellcheck="false"><button class="btn" type="button" id="crootgo">show</button></span></span>
   <span id="chips"></span>
-</div>
-<div class="bar3">
-  <span title="The city shows this directory and below (click a directory label to narrow, a crumb to widen)">city: <span id="crumbs"></span></span>
-  <input type="text" id="croot" placeholder="/path/to/dir" aria-label="City root directory" spellcheck="false"><button class="btn" type="button" id="crootgo">show</button><button class="btn" type="button" id="crootreset" title="Show every touched file">all</button>
   <span class="grow"></span>
   <span id="sizenote"></span>
   <span id="panelnote" class="sub"></span>
+  <button class="btn" type="button" id="helpbtn" aria-pressed="false" title="What you are looking at, mouse and keys (?)">?</button>
 </div>
 <div id="stage">
   <div id="labels"></div>
   <div id="fphud" hidden>first person · mouse looks (click to capture) · WASD move · space/E up · ctrl or Q/C down · shift sprint ×3 · Esc back to orbit</div>
-  <div id="help" title="click to hide">Below: the files as a city (footprint = log file size, height = edits, roots under the see-through plots = reads, pale lots = room for new files). Above it, each agent is a column through time: the present at the bottom, the past rising; wider, brighter = more tool calls / busy. Level links = messages; lines down to a roof = touches. Agents sit near the agents they message. Drag to orbit, right-drag to pan, wheel to zoom; drag an agent's base block to move and pin it, right-click it to pin / free. Around the agents: the machine's row with a row per agent's processes beside it (1), git commits per repo (2). Click a building or a column for details. (click to hide)</div>
+  <div id="help" hidden>
+    <button class="btn" type="button" id="helpx" title="Hide (?)" aria-label="Hide the guide">&times;</button>
+    <dl>
+      <dt>city</dt><dd>Below: every touched file is a building. Footprint = log file size, height = edits, roots under the see-through plots = reads, pale lots = room for new files.</dd>
+      <dt>agents</dt><dd>Above it, each agent is a column through time: the present at the bottom, the past rising. Wider and brighter = more tool calls / busy. Level links = messages; lines down to a roof = touches. Agents sit near the agents they message.</dd>
+      <dt>sides</dt><dd>The machine's row with a row per agent's processes beside it <kbd>1</kbd>, git commits per repo <kbd>2</kbd>.</dd>
+      <dt>mouse</dt><dd>Drag to orbit, right-drag to pan, wheel to zoom, double-click to orbit around that point. Click a building or a column for details and only its lines. Drag an agent's base block to move and pin it; right-click it to pin / free.</dd>
+      <dt>keys</dt><dd><kbd>1</kbd>&ndash;<kbd>5</kbd> views, <kbd>0</kbd> reset, <kbd>F</kbd> walk, <kbd>R</kbd> roots, <kbd>L</kbd> labels, <kbd>?</kbd> this guide, <kbd>Esc</kbd> closes.</dd>
+    </dl>
+  </div>
 </div>
 <div id="tip" hidden></div>
 <aside id="pane" hidden aria-label="Details">
@@ -151,8 +192,8 @@ function showErr(msg, err) {
   const n = [...errSeen.values()].reduce((a, b) => a + b, 0);
   $("conn").textContent = `${n} error${n > 1 ? "s" : ""} (${errSeen.size} distinct), check the browser console · latest: ${msg.length > 140 ? msg.slice(0, 140) + "…" : msg}`;
 }
-addEventListener("error", ev => showErr("error: " + (ev.message || ev.error), ev.error));
-addEventListener("unhandledrejection", ev => showErr("error: " + (ev.reason?.message || ev.reason), ev.reason));
+addEventListener("error", ev => { if (!ev.error?.reported) showErr("error: " + (ev.message || ev.error), ev.error); });
+addEventListener("unhandledrejection", ev => { if (!ev.reason?.reported) showErr("error: " + (ev.reason?.message || ev.reason), ev.reason); });
 
 window.addEventListener("arke-unlocked", () => load());
 
@@ -162,7 +203,8 @@ try {
   ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
 } catch (e) {
   showErr(`couldn't load three.js (${e.message}). On the bus host, run python3 install-service.py --assets-only.`);
-  throw e;
+  $("status").textContent = "not loaded"; e.reported = true;
+  throw e;  // nothing below can run
 }
 
 // CSS color (possibly var(--x)) -> THREE.Color
@@ -530,10 +572,11 @@ async function loadHoratio(w0, w1) {
 // ---------- the two side planes around the agents' cube (x: west -> east, z: north -> south, the default camera looks from the south) ----------
 // south (+z): the machine (horatio) and each agent's processes, east (+x): git commits per repo. Time runs up y, as in the columns.
 const cubeBox = () => ({ x0: toX(0) - 4, x1: toX(LW) + 4, z0: toZ(0) - 4, z1: toZ(LH) + 4 });
-// a preset facing one plane hides the other (and its labels) until the camera is moved by hand or reset
+// a preset facing one plane hides the other (and its labels) until the camera is moved by hand or reset; "none" hides both
 let focusPlane = null;
+const planeOn = name => $(name === "south" ? "tsouth" : "teast").checked;  // "show" menu: each plane can be switched off
 function applyFocus() {
-  for (const o of world.children) if (o.userData.plane) o.visible = (!focusPlane || o.userData.plane === focusPlane) && (o.name !== "git" || $("tgit").checked);
+  for (const o of world.children) if (o.userData.plane) o.visible = (!focusPlane || o.userData.plane === focusPlane) && planeOn(o.userData.plane) && (o.name !== "git" || $("tgit").checked);
   requestRender();
 }
 const gapAll = () => Number($("gap").value);
@@ -565,7 +608,7 @@ function drawPanel(w0, w1, Y, P, buildingAt) {
     labels.slice(mark[1]).forEach(l => { l.plane = name; });
     mark = [world.children.length, labels.length];
   };
-  const tick = (v, html, color) => labels.push({ v, html: `<span class="tick"${color ? ` style="color:${esc(color)}"` : ""}>${html}</span>`, anchor: "below", pri: 4e8, tidy: true });
+  const tick = (v, html, color) => labels.push({ v, html: `<span class="tick"${color ? ` style="color:var(--ink);border-bottom:2px solid ${esc(color)}"` : ""}>${html}</span>`, anchor: "below", pri: 4e8, tidy: true });
 
   // ----- process samples in the window, per agent: the totals of each sample -----
   const byAgent = new Map();
@@ -584,8 +627,12 @@ function drawPanel(w0, w1, Y, P, buildingAt) {
     const names = [...byAgent.keys()].sort((a, b) => P.get(a).x - P.get(b).x), ground = tcolor("var(--ground)");
     const rows = 1 + names.length, U = Math.min(28, (B.x1 - B.x0) / rows), S = Math.max(2, Math.min(24, U - 4));
     const zS = planeAt.south(), rowX = r => B.x0 + r * U + U / 2, laneZ = i => zS + 4 + i * (S + 4) + S / 2, zEnd = n => zS + 4 + n * (S + 4);
+    // agents' lanes: full width = the busiest agent's peak, or (arrange menu) the whole machine, as in the machine's own row
+    const memTot = X3.machine?.mem_total_mb, cores = Number($("cores").value) || X3.machine?.cores || 16, share = $("pscale").value === "machine" && memTot > 0;
     let maxCpu = 100, maxRss = 256;
-    for (const g of byAgent.values()) for (const s of g.tot) { maxCpu = Math.max(maxCpu, s.a.cpu || 0); maxRss = Math.max(maxRss, s.a.rss_mb || 0); }
+    if (share) { maxCpu = 100 * cores; maxRss = memTot; }
+    else for (const g of byAgent.values()) for (const s of g.tot) { maxCpu = Math.max(maxCpu, s.a.cpu || 0); maxRss = Math.max(maxRss, s.a.rss_mb || 0); }
+    const side = (v, max) => Math.max(0.35, S * Math.min(1, (v || 0) / max));  // column side = value; a hairline when there is next to nothing
     planeSpan.south = [B.x0, B.x0 + rows * U]; planeSpan.southZ = [zS, zEnd(mets.length)];
     // each row: a base line along it, an upright at its inner end, and its name at its outer end
     const row = (r, lanes, html, color) => { const x = rowX(r) - U / 2;
@@ -597,7 +644,7 @@ function drawPanel(w0, w1, Y, P, buildingAt) {
       back(rowX(0) - S / 2 - 0.6, laneZ(i), 0.1, S, tcolor(color));
       labels.push({ v: new THREE.Vector3(B.x0 - 1, YP, laneZ(i)), html: `<span class="tick">${label}${i < 2 ? "" : ' <span class="m">(machine only)</span>'}</span>`, anchor: "r", pri: 4e8, tidy: true }); });
     cap(new THREE.Vector3((planeSpan.south[0] + planeSpan.south[1]) / 2, YP + TL + 5, zS), `machine (horatio)${names.length ? " · each agent's processes" : ""}`);
-    if (names.length) labels.push({ v: new THREE.Vector3(B.x0 + U, YP + TL + 1, zS), html: `<span class="tick">machine: full width = 100% · agents: full width = ${Math.round(maxCpu)}% of a core, ${Math.round(maxRss)} MB</span>`, anchor: "l", pri: 3e8 });
+    if (names.length) labels.push({ v: new THREE.Vector3(B.x0 + U, YP + TL + 1, zS), html: `<span class="tick">full width: machine = 100% · agents = ${share ? `the machine (${cores} cores, ${Math.round(memTot / 1024)} GB)` : `${Math.round(maxCpu)}% of a core, ${Math.round(maxRss)} MB (the busiest agent's peak)`}</span>`, anchor: "l", pri: 3e8, facing: true });
     const items = [], colors = mets.map(m => tcolor(m[2]));
     if (X3.hor?.length) {
       for (const sp of spans(X3.hor.filter(r => r.ts >= w0 - 30 && r.ts <= w1), Y, 120)) mets.forEach(([k], i) => { const v = sp.s[k];
@@ -606,8 +653,8 @@ function drawPanel(w0, w1, Y, P, buildingAt) {
     names.forEach((n, k) => { const c = tcolor(colorOf(n)), pale = c.clone().lerp(ground, 0.5);
       row(k + 1, 2, esc(n), colorOf(n));
       for (const sp of spans(byAgent.get(n).tot, Y, 60)) { const a = sp.s.a;
-        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 0, a: S * (0.15 + 0.85 * Math.min(1, (a.cpu || 0) / maxCpu)), c });
-        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 1, a: S * (0.15 + 0.85 * Math.min(1, (a.rss_mb || 0) / maxRss)), c: pale }); } });
+        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 0, a: side(a.cpu, maxCpu), c });
+        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 1, a: side(a.rss_mb, maxRss), c: pale }); } });
     const mesh = instanced(items.length, new THREE.MeshLambertMaterial());
     items.forEach((it, j) => setBox(mesh, j, it.x, it.sp.y, laneZ(it.i), it.a, it.sp.h, it.a, it.c));
     mesh.userData = { group: "panel", info: j => { const it = items[j], r = it.sp.s, when = `<span class="m">${dayOf(r.ts)} ${clock(r.ts, true)}</span>`;
@@ -709,8 +756,10 @@ async function rebuild(opts = {}) {
   const total = d => d.value = d.files.reduce((s, f) => s + f.value, 0) + [...d.dirs.values()].reduce((s, c) => s + total(c), 0);
   total(top);
   const planned = files.size ? planCity(top, `${range}|${projSel()}|${cityRoot}`) : "";
-  $("sizenote").innerHTML = !files.size ? "" : `footprint = log(file size)${nGuess ? ` <span class="note" title="files not on the bus's machine, outside the agents' working dirs, deleted, or relative to an unknown dir">· ${nGuess} of ${files.size} unknown, drawn at the median ${kb(median)}</span>` : ""}`
-    + ` <span class="sub" title="The city keeps its plan while files come and go; new files are built on their directory's empty lot. Re-planned when the window or project changes or a lot runs out.">· city ${planned}</span>`;
+  // said only when something is off: the footprint rule itself is in the guide (?), the plan's state on the re-plan button
+  $("sizenote").innerHTML = !nGuess ? "" : `<span class="note" title="Footprint = log(file size). These files are not on the bus's machine, outside the agents' working dirs, deleted, or relative to an unknown dir">${nGuess} of ${files.size} file sizes unknown, drawn at the median ${kb(median)}</span>`;
+  if (!files.size) $("sizenote").innerHTML = `<span class="note">no touched files ${cityRoot ? `under <span class="mono">${esc(cityRoot)}</span> ` : ""}in this window${cityRoot ? ' · <span class="crumb" data-root="">show all</span>' : ""}</span>`;
+  $("replan").title = `Lay the city out again from scratch. The city keeps its plan while files come and go (new files are built on their directory's empty lot); it is re-planned when the window or project changes or a lot runs out.${planned ? " Now: " + planned + "." : ""}`;
 
   clearNear(); disposeWorld(); pickables = []; labels = [];
   // ----- the city -----
@@ -931,7 +980,7 @@ function placeLabels() {
   // most important first; a "tidy" label that would overlap one already placed is hidden (hover the thing for its name)
   for (const l of [...labels].sort((a, b) => (b.pri ?? 0) - (a.pri ?? 0))) {
     if (!l.el) continue;
-    if (l.plane && focusPlane && l.plane !== focusPlane) { l.el.style.display = "none"; continue; }
+    if (l.plane && (focusPlane && l.plane !== focusPlane || !planeOn(l.plane)) || l.facing && focusPlane !== l.plane) { l.el.style.display = "none"; continue; }
     v.copy(l.v).project(camera);
     if (v.z > 1 || v.x < -1.2 || v.x > 1.2 || v.y < -1.2 || v.y > 1.2) { l.el.style.display = "none"; continue; }
     if (l.v2) {  // level of detail: a directory's label shows once its plot spans minPx on screen
@@ -955,9 +1004,10 @@ function placeLabels() {
 const ray = new THREE.Raycaster(); ray.params.Line.threshold = 1.2;
 const tipEl = $("tip"), ndc = new THREE.Vector2(), dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -62);
 function aim(ev) { const r = renderer.domElement.getBoundingClientRect(); ndc.set((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1); ray.setFromCamera(ndc, camera); }
-function pick(ev) {
+function pick(ev, click = false) {
   aim(ev);
-  const hits = ray.intersectObjects(pickables.filter(o => o.visible), false);
+  let hits = ray.intersectObjects(pickables.filter(o => o.visible), false);
+  if (click) hits = hits.filter(x => x.object.userData.click);  // a click passes through what only has a tooltip (the planes, the lines)
   if (!hits.length) return null;
   // solid things (columns, buildings, plots) win over lines: every touch line ends on a roof, so a line is
   // under the cursor almost everywhere there; lines are hoverable where nothing solid is
@@ -1045,7 +1095,7 @@ cv.addEventListener("pointerup", ev => {
   // the click acts a moment later, so a double-click (recenter) can cancel it: opening the pane would resize the canvas under it
   clearTimeout(clickT);
   if (ev.detail > 1) return;  // the second half of a double-click
-  const p = pick(ev);
+  const p = pick(ev, true);
   clickT = setTimeout(() => {
     if (p && p.obj.userData.click) p.obj.userData.click(p.i);
     else if (fileSel || agentSel) { fileSel = ""; agentSel = ""; refilter(); }
@@ -1075,8 +1125,23 @@ for (const id of ["recent", "gap"]) {
 }
 $("gfree").onclick = () => { const o = savedPositions(); for (const p of o.values()) p.pinned = false; writePositions(o); relabel(); };
 $("replan").onclick = () => { forceReplan = true; relabel(); };
-$("help").hidden = pref("an.3help", "1") === "0";
-$("help").onclick = () => { $("help").hidden = true; setPref("an.3help", "0"); };
+// the guide: shown until closed, "?" brings it back
+function setHelp(on) { $("help").hidden = !on; $("helpbtn").setAttribute("aria-pressed", String(on)); setPref("an.3help", on ? "1" : "0"); }
+setHelp(pref("an.3help", "1") !== "0");
+$("helpbtn").onclick = () => setHelp($("help").hidden);
+$("helpx").onclick = () => setHelp(false);
+// the two planes and the labels: shown / hidden in place, no rebuild
+for (const id of ["tsouth", "teast", "tlabels"]) {
+  $(id).checked = pref("an.3" + id, "1") === "1";
+  $(id).addEventListener("change", () => { setPref("an.3" + id, $(id).checked ? "1" : "0"); if (id === "tlabels") lab.hidden = !$(id).checked; else applyFocus(); });
+}
+lab.hidden = !$("tlabels").checked;
+// menus: one open at a time; a click elsewhere or Esc closes
+const menus = [...document.querySelectorAll("details.arr")];
+for (const d of menus) d.addEventListener("toggle", () => { if (d.open) for (const o of menus) if (o !== d) o.open = false; });
+document.addEventListener("pointerdown", ev => { for (const d of menus) if (d.open && !d.contains(ev.target)) d.open = false; });
+document.addEventListener("keydown", ev => { if (ev.key !== "Escape") return; const d = menus.find(m => m.open); if (d) { d.open = false; d.querySelector("summary").focus(); } });
+
 darkMq.addEventListener("change", () => relabel());  // after base.js applied the theme
 
 // ---------- city root: show only one directory, filling the whole city ----------
@@ -1090,11 +1155,15 @@ function renderCrumbs(topPath) {
   const segs = (topPath || "").split("/").filter(Boolean);
   $("crumbs").innerHTML = `<span class="crumb" data-root="" title="every touched file">all</span>` + segs.map((s, i) => ` / <span class="crumb" data-root="/${esc(segs.slice(0, i + 1).join("/"))}">${esc(s)}</span>`).join("");
 }
+$("sizenote").addEventListener("click", ev => { if (ev.target.closest("[data-root]")) setRoot(""); });
 $("crumbs").addEventListener("click", ev => { const c = ev.target.closest("[data-root]"); if (c) setRoot(c.dataset.root); });
 $("croot").value = cityRoot;
 $("croot").addEventListener("keydown", ev => { if (ev.key === "Enter") setRoot($("croot").value); });
 $("crootgo").onclick = () => setRoot($("croot").value);
-$("crootreset").onclick = () => setRoot("");
+// the path box shows only when asked for ("…"), or while a typed root is in effect
+function rootBox(on) { $("crootbox").hidden = !on; $("crootedit").setAttribute("aria-expanded", String(on)); if (on) $("croot").focus(); }
+$("crootedit").onclick = () => rootBox($("crootbox").hidden);
+$("croot").addEventListener("keydown", ev => { if (ev.key === "Escape") { rootBox(false); $("crootedit").focus(); ev.stopPropagation(); } });
 // directory labels: hover lights up the plot, click shows only that directory
 lab.addEventListener("mouseover", ev => { const d = ev.target.closest("[data-di]"); if (!d || !cityDirs) return; cityDirs.mesh.setColorAt(Number(d.dataset.di), tcolor("var(--accent)")); cityDirs.mesh.instanceColor.needsUpdate = true; requestRender(); });
 lab.addEventListener("mouseout", ev => { const d = ev.target.closest("[data-di]"); if (!d || !cityDirs) return; const r = cityDirs.dirs[Number(d.dataset.di)]; if (r) { cityDirs.mesh.setColorAt(Number(d.dataset.di), r.color); cityDirs.mesh.instanceColor.needsUpdate = true; requestRender(); } });
@@ -1131,7 +1200,9 @@ const PRESETS = {
   // 4: from just under the present, looking up the agents' columns into the past
   up: () => { const c = graphCenter(); return [new THREE.Vector3(c.x + 25, Math.max(4, YP * 0.35), toZ(LH) + 30), new THREE.Vector3(c.x, YP + TL * 0.7, c.z), UP]; },
   // 5: from the side, rolled so time runs left (past) to right (now)
-  side: () => { const c = graphCenter(), d = Math.max(TL, CW * ARR.gs) * 1.25; return [new THREE.Vector3(c.x, c.y, c.z + d), c, new THREE.Vector3(1, 0, 0)]; },
+  side: () => { const c = graphCenter(), t = Math.tan(camera.fov * Math.PI / 360), B = cubeBox();  // far enough for the whole history (across the screen) and every agent (up it)
+    const d = Math.max((TL + 40) / 2 / t / camera.aspect, (B.x1 - B.x0 + 30) / 2 / t) * 1.08 + (B.z1 - B.z0) / 2;
+    return [new THREE.Vector3(c.x, c.y, c.z + d), c, new THREE.Vector3(1, 0, 0)]; },
   // 3: straight down onto the city
   city: () => { const c = new THREE.Vector3(CXw(0), 0, CZw(0)); return [new THREE.Vector3(c.x, Math.max(CW, CD) * ARR.cs * 1.5, c.z + 1), c, UP]; },
   // 1: the machine's and the agents' rows from outside their south-west corner and a little above, so both the rows and the
@@ -1144,7 +1215,10 @@ function facing(c, normal, width, extraH = 0) {
   const t = Math.tan(camera.fov * Math.PI / 360), d = Math.max((TL + 20 + extraH) / 2 / t, (width + 30) / 2 / t / camera.aspect) * 1.08;
   return [c.clone().addScaledVector(normal, d), c, UP];
 }
-function preset(k) { if (fp) fpExit(); focusPlane = ["south", "east"].includes(k) ? k : null; applyFocus(); const [pos, tgt, up] = PRESETS[k](); flyTo(pos, tgt, 750, up); }
+function preset(k) {
+  if (fp) fpExit(); focusPlane = ["south", "east"].includes(k) ? k : ["side", "city"].includes(k) ? "none" : null;  // side / city would look through the planes: hide both
+  if (focusPlane && focusPlane !== "none" && !planeOn(focusPlane)) $(focusPlane === "south" ? "tsouth" : "teast").click();  // asked to face a plane that was switched off: show it
+  applyFocus(); const [pos, tgt, up] = PRESETS[k](); flyTo(pos, tgt, 750, up); }
 for (const b of document.querySelectorAll("[data-preset]")) b.onclick = () => preset(b.dataset.preset);
 $("home").onclick = () => { setUp(UP); focusPlane = null; applyFocus(); home(); };
 document.addEventListener("keydown", ev => {
@@ -1154,6 +1228,8 @@ document.addEventListener("keydown", ev => {
   else if (ev.code === "Digit0") { setUp(UP); focusPlane = null; applyFocus(); home(); }
   else if (ev.code === "KeyF" && !fp) fpEnter();
   else if (ev.code === "KeyR" && !fp) $("roots").click();
+  else if (ev.code === "KeyL" && !fp) $("tlabels").click();
+  else if (ev.key === "?") $("helpbtn").click();
 });
 
 // ---------- first person: pointer-lock mouse look, WASD to move, space / E up, ctrl (or Q / C) down, shift sprints, Esc back to orbit ----------
@@ -1162,7 +1238,7 @@ function fpEnter() {
   cancelAnimationFrame(flight); setUp(UP);
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
   fp = { yaw: Math.atan2(-dir.x, -dir.z), pitch: Math.asin(Math.max(-1, Math.min(1, dir.y))), keys: new Set(), last: performance.now(), raf: 0 };
-  controls.enabled = false; $("fphud").hidden = false; $("fpbtn").setAttribute("aria-pressed", "true");
+  controls.enabled = false; tipEl.hidden = true; $("fphud").hidden = false; $("fpspeedl").hidden = false; $("fpbtn").setAttribute("aria-pressed", "true");
   const r = cv.requestPointerLock?.();
   if (r?.catch) r.catch(e => console.warn("no pointer lock (drag to look instead)", e));
   fp.raf = requestAnimationFrame(fpTick);
@@ -1173,7 +1249,7 @@ function fpExit() {
   if (document.pointerLockElement === cv) document.exitPointerLock();
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
   controls.target.copy(camera.position).addScaledVector(dir, 60); controls.enabled = true; controls.update(); userMoved = true;
-  $("fphud").hidden = true; $("fpbtn").setAttribute("aria-pressed", "false"); requestRender();
+  $("fphud").hidden = true; $("fpspeedl").hidden = true; $("fpbtn").setAttribute("aria-pressed", "false"); requestRender();
 }
 function fpLook(ev) {
   if (document.pointerLockElement !== cv && !ev.buttons) return;  // without pointer lock: drag to look
@@ -1189,6 +1265,7 @@ function fpTick(now) {
   camera.position.addScaledVector(right, sp * ((K("KeyD") ? 1 : 0) - (K("KeyA") ? 1 : 0)));
   camera.position.y += sp * ((K("Space") || K("KeyE") ? 1 : 0) - (K("ControlLeft") || K("ControlRight") || K("KeyQ") || K("KeyC") ? 1 : 0));
   camera.quaternion.setFromEuler(new THREE.Euler(fp.pitch, fp.yaw, 0, "YXZ"));
+  if ((fp.n = (fp.n || 0) + 1) % 10 === 0) try { nearDetail(); } catch (e) { showErr("close-up: " + (e.message || e), e); }  // roof text and side history, every 10th frame
   renderer.render(scene, camera);
   try { placeLabels(); } catch (e) { showErr("labels: " + (e.message || e), e); }
   fp.raf = requestAnimationFrame(fpTick);
@@ -1214,9 +1291,10 @@ cv.addEventListener("wheel", ev => {
 
 // ---------- up close: a building's text on its roof and its edit history up its sides (only the 1-3 nearest, only when close) ----------
 const near = new Map();  // file key -> {mesh, mats}
+const cssv = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const textCache = new Map();  // file key -> {last, local, info, pending}; refresh after file activity
 function wrapText(ctx, text, W, H) {
-  ctx.fillStyle = "#fbfbf6"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#1d2330"; ctx.font = "13px monospace";
+  ctx.fillStyle = cssv("--panel"); ctx.fillRect(0, 0, W, H); ctx.fillStyle = cssv("--ink"); ctx.font = "13px monospace";
   const lines = text.split("\n").slice(0, Math.floor(H / 15) - 1);
   lines.forEach((l, i) => ctx.fillText(l.replace(/\t/g, "    ").slice(0, 70), 6, 16 + i * 15));
 }
@@ -1245,7 +1323,7 @@ function sideTexture(key) {
   // the file's touches in the window, oldest at the bottom: a band per touch in the toucher's color (edits wide, reads a sliver)
   const ts = M.touches.filter(t => t.key === key && t.ts >= S.w0).sort((a, b) => a.ts - b.ts).slice(-256);
   const c = document.createElement("canvas"); c.width = 64; c.height = 256;
-  const ctx = c.getContext("2d"); ctx.fillStyle = "#dfe3ea"; ctx.fillRect(0, 0, 64, 256);
+  const ctx = c.getContext("2d"); ctx.fillStyle = cssv("--line"); ctx.fillRect(0, 0, 64, 256);
   const bh = 256 / Math.max(1, ts.length);
   ts.forEach((t, i) => { ctx.fillStyle = "#" + tcolor(colorOf(t.agent)).getHexString(); ctx.fillRect(t.write ? 0 : 24, 256 - (i + 1) * bh, t.write ? 64 : 16, Math.max(1, bh - 0.5)); });
   return new THREE.CanvasTexture(c);
@@ -1278,12 +1356,13 @@ for (const [id, key] of ARR_IDS) {
   $(id).value = ARR[key];
   let t = 0; $(id).addEventListener("input", () => { ARR[key] = Number($(id).value); saveArr(); clearTimeout(t); t = setTimeout(() => relabel(), 120); });
 }
-$("areset").onclick = () => { ARR = { ...ARR0 }; saveArr(); for (const [id, key] of ARR_IDS) $(id).value = ARR[key]; relabel(); };
-// cores: what you typed wins (remembered); else the bus machine's own count from GET /machine; else 16
+$("areset").onclick = () => { ARR = { ...ARR0 }; saveArr(); for (const [id, key] of ARR_IDS) $(id).value = ARR[key]; $("gap").value = 0; setPref("an.3gap", "0"); relabel(); };
+// cores (for the agents' rows on the machine's scale): what you typed wins (remembered); else the bus machine's own count from GET /machine; else 16
 $("cores").value = pref("an.3cores", "");
 $("cores").addEventListener("change", () => { setPref("an.3cores", $("cores").value); relabel(); });
 $("tgit").checked = pref("an.3tgit", "1") === "1";
 $("tgit").addEventListener("change", () => { setPref("an.3tgit", $("tgit").checked ? "1" : "0"); applyFocus(); });
+$("pscale").value = pref("an.3pscale", "own"); $("pscale").addEventListener("change", () => { setPref("an.3pscale", $("pscale").value); relabel(); });
 $("hscale").value = pref("an.3hscale", $("hscale").value); $("hscale").addEventListener("change", () => { setPref("an.3hscale", $("hscale").value); relabel(); });
 $("roots").checked = pref("an.3roots", "1") === "1"; $("roots").addEventListener("change", () => { setPref("an.3roots", $("roots").checked ? "1" : "0"); relabel(); });
 

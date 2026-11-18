@@ -35,7 +35,8 @@ a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible
 .top .grow { flex: 1; }
 .btn, select, input[type=search] { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
 input[type=search] { cursor: text; width: 14em; max-width: 100%; }
-.btn:hover { border-color: var(--accent); }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
 .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .seg { display: inline-flex; }
 .seg .btn { border-radius: 0; margin-left: -1px; }
@@ -96,7 +97,7 @@ a.name:hover, a.proj:hover { color: var(--accent); }
 .snap h3 .sub { font-weight: 400; margin-left: 6px; }
 .snapg { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 2px 18px; }
 .sn { display: grid; grid-template-columns: 9ch minmax(0, 1fr); gap: 0 8px; font-size: 12px; padding: 2px 0; border-bottom: 1px dashed var(--line); min-width: 0; }
-.sn .who { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; min-width: 0; }
+.sn .who { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .sn .st { color: var(--muted); font-family: var(--mono); font-size: 11px; }
 .sn .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .sn .what b { color: var(--ink); font-weight: 500; }
@@ -118,7 +119,7 @@ a.name:hover, a.proj:hover { color: var(--accent); }
 .mx th.v { writing-mode: vertical-rl; transform: rotate(180deg); text-transform: none; letter-spacing: 0; font: 500 11.5px var(--mono); padding: 6px 2px; vertical-align: bottom; max-height: 140px; }
 .mx th.v a, .mx td a { text-decoration-thickness: 2px; }
 .conf { list-style: none; margin: 0; padding: 0 14px 10px; font-size: 12.5px; }
-.conf li { padding: 3px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
+.conf li { overflow-wrap: anywhere; padding: 3px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
 .conf li:hover { background: var(--tint); }
 .conf .fn { font-family: var(--mono); }
 
@@ -180,9 +181,9 @@ svg.tsc .tsbr { fill: var(--accent); opacity: .15; }
 </head>
 <body>
 <header class="top">
-  <h1>arke analytics</h1>
+  <h1><a href="/">arke</a></h1>
   <span class="host" id="host"></span>
-  <a class="btn" id="console" href="/">&larr; console</a>
+  <nav class="nav" aria-label="Pages"><a id="console" href="/">console</a><a href="analytics" aria-current="page">analytics</a><a id="to3d" href="analytics3d" title="The same history in 3D: the files as a city, the agents as columns through time">3D</a></nav>
   <span class="netstat wait" id="netstat" role="status">connecting</span>
   <span class="grow"></span>
   <span class="seg" id="ranges" role="group" aria-label="Time range">
@@ -275,7 +276,6 @@ svg.tsc .tsbr { fill: var(--accent); opacity: .15; }
       <label class="sub"><input type="checkbox" id="ghuman" checked> human</label>
       <button class="btn" type="button" id="gfree" title="Unpin every node and let the layout move them">free all</button>
       <button class="btn" type="button" id="greset" title="Forget saved positions and pins, lay out again from scratch">re-layout</button>
-      <a class="btn" id="to3d" href="analytics3d" title="The same graph in 3D, with time as depth and a city map of the files">3D view &rarr;</a>
     </div>
   </div>
   <svg id="graphsvg" height="480" aria-label="Who talks to whom as a graph: agents that message each other more sit closer"></svg>
@@ -500,7 +500,7 @@ function renderSnap() {
     const s = st ? st.state : "?";
     const doing = tool ? `<b>${esc(tool.tool)}</b> ${esc((tool.desc || tool.files.map(f => f.path).join(" ") || tool.target).slice(0, 140))} <span class="st">${dur(T - tool.ts)} before</span>` : "no tool calls yet";
     const said = msg && T - msg.ts < 1800 ? `<div class="what" style="grid-column:2">said ${dur(T - msg.ts)} before → ${esc(msg.reach.join(", ") || msg.to.map(t => t.name).join(", ") || "?")}: ${esc(msg.text.slice(0, 120))}</div>` : "";
-    return `<div class="sn"><div class="who"><span class="dot ${s}"></span>${agentLink(L.name)} <span class="st">${s}${st ? " for " + dur(T - st.since) : ""}</span></div><div class="st">last tool</div><div class="what">${doing}</div>${said}</div>`;
+    return `<div class="sn"><div class="who"><span class="dot ${s}"></span>${agentLink(L.name)} <span class="st">${s}${st ? " for " + dur(T - st.since) : ""}</span></div><div class="st">last tool</div><div class="what">${doing}</div>${said || '<div class="what" style="grid-column:2">&nbsp;</div>'}</div>`;
   });
   $("snap").innerHTML = `<h3>${live ? "Now" : `At ${dayOf(T)} ${clock(T, true)}`}<span class="sub">${pinT != null && hoverT == null ? "pinned · click the timeline again to unpin" : "hover the timeline to move this moment; click to pin it"}</span></h3><div class="snapg">${rows.join("") || '<span class="sub">no agents in view</span>'}</div>`;
 }
@@ -605,7 +605,7 @@ function renderNow() {
   $("nowsub").textContent = `${live.filter(a => a.state === "busy").length} busy, ${live.filter(a => a.state === "idle").length} idle (from /agents, ${clock(t)})`;
   const rows = live.map(a => {
     const L = M.lanes.get(a.name), st = L ? stateAt(L, t) : null, tool = L ? L.tools[L.tools.length - 1] : null, since = st ? t - st.since : null;
-    const sinceTool = tool ? t - tool.ts : null, lastIn = L ? L.recv[L.recv.length - 1] : null, lastOut = L ? L.sent[L.sent.length - 1] : null;
+    const sinceTool = tool ? t - tool.ts : null, lastIn = L ? L.recv.findLast(m => m.to.some(x => x.name === a.name)) || null : null, lastOut = L ? L.sent[L.sent.length - 1] : null;
     const flags = [];
     if (a.state === "busy" && sinceTool != null && sinceTool > 900) flags.push(`<span class="flag warn" title="busy, but its last tool call was ${dur(sinceTool)} ago">silent ${dur(sinceTool)}</span>`);
     if (a.state === "idle" && lastIn && (!lastOut || lastOut.ts < lastIn.ts)) flags.push(`<span class="flag warn" title="last message in: ${esc(lastIn.from)} at ${clock(lastIn.ts)}: ${esc(lastIn.text.slice(0, 120))}">idle, owes a reply to ${esc(lastIn.from)}</span>`);
@@ -924,7 +924,9 @@ function tsTotal(S, how) {
 // path through bucket centres; NaN breaks the line. ys: value -> y px
 function tsPath(arr, xs, ys) {
   let d = "", pen = false;
-  for (let i = 0; i < NB; i++) { if (isNaN(arr[i])) { pen = false; continue; } d += (pen ? "L" : "M") + xs(i).toFixed(1) + " " + ys(arr[i]).toFixed(1); pen = true; }
+  for (let i = 0; i < NB; i++) { if (isNaN(arr[i])) { pen = false; continue; }
+    const alone = !pen && (i + 1 >= NB || isNaN(arr[i + 1]));  // a sample with no neighbours: a short dash, or it would draw nothing
+    d += alone ? `M${(xs(i) - 1.5).toFixed(1)} ${ys(arr[i]).toFixed(1)}h3` : (pen ? "L" : "M") + xs(i).toFixed(1) + " " + ys(arr[i]).toFixed(1); pen = !alone; }
   return d;
 }
 function tsArea(top, bot, xs, ys) {  // closed band between two arrays (runs of defined values)
@@ -1015,7 +1017,7 @@ function renderTS(w0, w1) {
   const bwl = dur(B.bw);
   $("tssub").textContent = `${NB} buckets of ${bwl} · ${order.length} agents${focus.size ? " · focus: " + [...focus].join(", ") : ""}`;
   $("tsleg").innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;color:var(--muted)"><i style="--c:var(--ink);opacity:.55"></i>all agents</span>`
-    + order.map(a => `<span data-focus="${esc(a)}" class="${focus.size && !focus.has(a) ? "dim" : ""}" style="--c:${colorOf(a)};color:${colorOf(a)}" title="click to focus ${esc(a)}"><i></i>${esc(a)}</span>`).join("")
+    + order.map(a => `<span data-focus="${esc(a)}" class="${focus.size && !focus.has(a) ? "dim" : ""}" style="--c:${colorOf(a)}" title="click to focus ${esc(a)}"><i></i>${esc(a)}</span>`).join("")
     + `<span class="sub">click a name to focus · drag a chart to zoom · double-click to reset</span>`;
   // overall: the four totals, each scaled to its own peak in the window (the tooltip has the real numbers)
   const tot = {}; for (const k of ["tools", "edits", "tokens", "msgs"]) tot[k] = tsTotal(S(k), "sum0");
@@ -1052,7 +1054,15 @@ function renderTS(w0, w1) {
     const mk = () => ({ s: new Float64Array(NB), n: new Uint32Array(NB) }), c = mk(), m = mk();
     for (const r of TS.horatio) { const i = Math.floor((r.ts - w0) / B.bw); if (i < 0 || i >= NB) continue;
       if (isFinite(r.cpu)) { c.s[i] += r.cpu; c.n[i]++; } if (isFinite(r.mem)) { m.s[i] += r.mem; m.n[i]++; } }
-    const fin = g => Float64Array.from(g.s, (v, i) => g.n[i] ? v / g.n[i] : NaN);
+    // horatio records can be further apart than a bucket is wide (a short window): join neighbours up to two record intervals apart,
+    // or each sample would sit alone between empty buckets and no line would be drawn
+    const gaps = TS.horatio.slice(1).map((r, i) => r.ts - TS.horatio[i].ts).filter(d => d > 0).sort((x, y) => x - y);
+    const reach = Math.ceil(2 * (gaps[gaps.length >> 1] || 0) / B.bw);
+    const fin = g => { const out = Float64Array.from(g.s, (v, i) => g.n[i] ? v / g.n[i] : NaN);
+      for (let i = 0, last = -1; i < NB; i++) { if (isNaN(out[i])) continue;
+        if (last >= 0 && i - last > 1 && i - last <= reach) for (let k = last + 1; k < i; k++) out[k] = out[last] + (out[i] - out[last]) * (k - last) / (i - last);
+        last = i; }
+      return out; };
     const MS = new Map([["cpu avg", fin(c)], ["memory", fin(m)]]);
     if ([...MS.values()].every(a => a.every(isNaN))) h += tsNote("Machine (horatio)", `no horatio records in this window (history goes back at most 48 h)`);
     else h += tsChart({ id: "machine", title: "Machine (horatio)", sub: `<b style="color:var(--accent)">CPU avg</b> · <b style="color:var(--busy)">memory used</b>, % of the host`, S: MS, fmt: tsPct, stack: false, max: 100, how: "none", fixed: { "cpu avg": "var(--accent)", memory: "var(--busy)" } }, B, ["cpu avg", "memory"]);

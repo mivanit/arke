@@ -12,7 +12,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --ground: #10151d; --panel: #171e29; --ink: #e3e8f0; --muted: #93a0b3; --line: #29323f; --line-strong: #3b4656; --tint: #1e2733;
-  --accent: #7aa2ff; --accent-soft: #1d2a45; --on-accent: #ffffff;
+  --accent: #7aa2ff; --accent-soft: #1d2a45; --on-accent: #0c1322;
   --busy: #e5b45a; --busy-soft: #3a2e17; --idle: #6fcf97; --idle-soft: #173226; --off: #7d8796; --off-soft: #2f3a49;
   --warn: #fb923c; --warn-soft: #3a2614; --err: #fc8181; --err-soft: #3d1c1f; --human: #e08fd4; --human-soft: #2d1a2a;
   --in: #4fd1c5; --out: #e2b052;
@@ -24,6 +24,13 @@ a { color: inherit; text-decoration: none; }
 .netstat::before { content: "●"; margin-right: 5px; color: var(--muted); }
 .netstat.up::before { color: var(--idle); } .netstat.retry::before { color: var(--busy); }
 .netstat.down { color: var(--err); } .netstat.down::before { color: var(--err); }
+
+/* the page switcher in every header: console / analytics / 3D, the current page marked */
+.nav { display: inline-flex; }
+.nav a { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); padding: 3px 9px; margin-left: -1px; white-space: nowrap; }
+.nav a:first-child { border-radius: 4px 0 0 4px; margin-left: 0; } .nav a:last-child { border-radius: 0 4px 4px 0; }
+.nav a:hover { border-color: var(--accent); color: var(--accent); position: relative; }
+.nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
 /* the analytics pages' side pane: docked right on wide screens, an overlay on phones */
 #pane { position: fixed; top: 0; right: 0; bottom: 0; width: var(--pw, 440px); z-index: 60; background: var(--panel); border-left: 1px solid var(--line-strong);

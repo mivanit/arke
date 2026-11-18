@@ -198,11 +198,24 @@ body.noboard .msg.board, body.noboard .transcript li.bus.board { display: none; 
 #to-sug li span[data-c] { text-decoration: underline; text-decoration-color: var(--c); text-underline-offset: 3px; }
 .btn:disabled { opacity: .45; cursor: default; }
 /* sortable agents table headers */
-#agents-table th[data-col] { cursor: pointer; user-select: none; }
+#agents-table th[data-col] { cursor: pointer; user-select: none; overflow: hidden; text-overflow: ellipsis; }
 #agents-table th[data-col]:hover { color: var(--ink); }
-#agents-table th .arrow { color: var(--accent); margin-left: 3px; }
-#agents-table th .hide-x { visibility: hidden; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--muted); background: var(--panel); border: 0; padding: 0 2px; cursor: pointer; }
-#agents-table th:hover .hide-x { visibility: visible; } #agents-table th .hide-x:hover { color: var(--err); }
+#agents-table th[aria-sort]:not([aria-sort="none"]) { color: var(--ink); }
+#agents-table th .sortb { font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+/* the arrow's room is always there, so sorting or hovering never shifts a label; hovering an unsorted column previews its first direction */
+#agents-table th.num .arrow { margin: 0 2px 0 0; }
+#agents-table th .arrow { display: inline-block; width: 11px; margin-left: 2px; text-align: center; font-size: 9px; color: var(--accent); }
+#agents-table th[aria-sort="none"]:hover .arrow::before, #agents-table th[aria-sort="none"]:focus-within .arrow::before { content: attr(data-first); color: var(--line-strong); }
+#colmenu { position: fixed; z-index: 10; display: flex; flex-direction: column; padding: 4px; min-width: 190px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+#colmenu[hidden] { display: none; }
+#colmenu .mh { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 3px 8px 4px; }
+#colmenu button { font: inherit; color: var(--ink); text-align: left; background: none; border: 0; border-radius: 3px; padding: 4px 8px; cursor: pointer; }
+#colmenu button:hover:not(:disabled), #colmenu button:focus-visible { background: var(--accent-soft); outline: none; }
+#colmenu button:disabled { color: var(--muted); cursor: default; }
+#colmenu button.on::after { content: "✓"; float: right; color: var(--accent); margin-left: 12px; }
+#colmenu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+#cols-pick b { font-weight: 600; color: var(--warn); margin-left: 3px; }
+#toast button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin-left: 10px; text-decoration: underline; cursor: pointer; }
 #agents-table th .grp { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 3px 0 0; font-size: 11px; }
 summary.edsum { display: flex; gap: 6px; align-items: baseline; }
 .eds { display: flex; flex-direction: column; min-width: 0; } .ed { font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -236,7 +249,7 @@ h2 .pin { font-size: 18px; }
 /* header controls */
 .prefs { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
 .prefs select, .btn { font: 12px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 6px; cursor: pointer; }
-.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .tree-head { display: flex; justify-content: space-between; align-items: center; }
 .tree-head .btn { padding: 0 6px; }
 body.tree-off .layout { grid-template-columns: minmax(0, 1fr); }
@@ -258,6 +271,7 @@ tr:hover .hide-a, .hide-a:focus { visibility: visible; } .hide-a:hover { color: 
 .strip a.dropat { box-shadow: 0 2px 0 var(--accent); } .strip a[data-pin] { cursor: grab; }
 .strip .sub:last-child { margin-left: auto; }
 #agents-table td.projs { white-space: normal; }
+#agents-table td.projs .proj { max-width: 100%; margin-right: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; vertical-align: bottom; }
 .kind { font: 600 10px var(--sans); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 4px; vertical-align: 1px; letter-spacing: 0.02em; }
 .ctx { display: inline-flex; align-items: center; gap: 6px; }
 .ctx .bar { width: 40px; height: 5px; border-radius: 3px; background: var(--off-soft); overflow: hidden; }
@@ -326,6 +340,8 @@ pre code { border: 0; padding: 0; background: none; }
   .split[data-tab="overview"] .handle { display: none; } .split[data-tab="overview"] .side { margin-left: 0; }
 }
 @media (max-width: 760px) {
+  .ahead .colsgrp { display: none; }  /* the table is cards here: no columns to choose or size */
+  .arow { flex-wrap: wrap; } .arow .atask { flex-basis: 100%; white-space: normal; text-align: left; }
   .layout { grid-template-columns: minmax(0, 1fr); }
   .tree { position: static; padding: 8px; }
   .tree .title { display: none; }
@@ -373,13 +389,13 @@ pre code { border: 0; padding: 0; background: none; }
 <header class="top">
   <h1><a href="#">arke</a></h1>
   <span class="host" id="host"></span>
+  <nav class="nav" aria-label="Pages"><a href="#" aria-current="page">console</a><a id="analytics" href="/analytics" title="Who was doing what and when: activity, files, messages, tokens, processes">analytics</a><a id="analytics3d" href="/analytics3d" title="The same history in 3D: the files as a city, the agents as columns through time">3D</a></nav>
   <button class="waiting" id="waiting" type="button" hidden title="Messages to you that you haven't answered: click to see them"></button>
   <span class="netstat wait" id="netstat" role="status" data-tip="">connecting</span>
   <span class="conn" id="conn" role="status"></span>
   <span class="conn send-err" id="send-err" role="alert"></span>
   <span class="prefs">
     <button class="btn" id="tree-open" type="button" hidden title="Show the project list">Projects</button>
-    <a class="btn" id="analytics" href="/analytics" title="Bus analytics (separate page)">analytics</a>
     <a class="btn" href="#help">help</a>
     <label>theme <select id="theme"><option value="system">system</option><option value="light">light</option><option value="dark">dark</option></select></label>
     <label>markdown <select id="mdmode"><option value="rendered">rendered</option><option value="plain">plain</option></select></label>
@@ -387,6 +403,7 @@ pre code { border: 0; padding: 0; background: none; }
 </header>
 <div id="tip" role="tooltip" hidden></div>
 <div id="colpop" class="panel" hidden></div>
+<div id="colmenu" class="panel" role="menu" hidden></div>
 <div id="toast" role="status" hidden></div>
 <div id="cpick" hidden><input type="color" id="cp-in" aria-label="Color"><button class="btn" id="cp-rand" type="button" title="Pick a random color">random</button><button class="btn" id="cp-reset" type="button" title="Go back to the default color">reset to default</button></div>
 <style id="color-css"></style>
@@ -406,7 +423,7 @@ pre code { border: 0; padding: 0; background: none; }
     hooks and can message each other, projects, or you. This console shows all of it and lets you send messages.</p>
   <h3>Reading the console</h3>
   <ul>
-    <li><b>Views:</b> all agents (<code>#</code>), one project and its subprojects (left list), or one agent (click a name). Offline agents are hidden from the table until you click "show offline".</li>
+    <li><b>Views:</b> all agents (<code>#</code>), one project and its subprojects (left list), or one agent (click a name). Offline agents are hidden from the table until you click "offline".</li>
     <li><b>Agent tabs:</b> overview (transcript + compose, recent activity and messages on the side), transcript, activity, messages, columns, stacked. "show more" opens the full activity/messages tab.</li>
     <li><b>State:</b> <span class="pill busy">busy</span> working, <span class="pill idle">idle</span> waiting for input, <span class="pill offline">offline</span> session ended.
       <span class="pill gone">unreachable</span> = its tmux pane is gone; <span class="stale">no activity</span> = no hooks heard from it for a while. Messages to either are still stored.</li>
@@ -415,10 +432,10 @@ pre code { border: 0; padding: 0; background: none; }
     <li><b>Recipients:</b> an agent name = direct message; <code>/project</code> = every agent subscribed to it or a subproject; <code>*</code> = everyone (use sparingly).
       To a project you choose <b>Notify</b> (delivered into each agent's context, idle agents on the bus host are woken) or <b>Board</b> (posted to the project board; agents see a one-line note and read it when they choose).</li>
     <li><b>Long messages:</b> only outgoing agent-to-agent messages longer than 3 lines are collapsed ("▸ expand" opens them): on an agent's page, what it sent; on a project page, messages not addressed to that project (or to everyone). The all-agents view collapses nothing. Incoming messages, messages to or from you, and the transcript's prompts and replies are always shown in full. "expand all" in a panel header opens every collapsed message and tool block there.</li>
-    <li><b>Sorting:</b> click a table header to sort by it, again to reverse. The default is by state, then most recently active.</li>
-    <li><b>Columns:</b> drag a table header's right edge to resize; "fit" fits them to the content, "reset widths" restores the defaults.
+    <li><b>Sorting:</b> click a table header to sort by it, again to reverse, a third time to go back to the default (by state, then most recently active).</li>
+    <li><b>Columns:</b> drag a table header's right edge to resize, double-click the edge to fit that column; "fit" fits them all to the content, "reset widths" restores the defaults.
       The five timing columns (Last active, Sent, Received, Console, User) are collapsed by default into one <b>Times</b> column: the most recent of them, tagged A / S / R / C / U for which one, all five in its tooltip; sorting it sorts by that most recent time. ▸ in its header expands the group, ▾ collapses it again.
-      Hide any column (except Agent) with the ✕ that shows when you hover its header, or by right-clicking the header; the "columns" button lists every column to show or hide, and resets. Saved in this browser.</li>
+      Right-click a header for that column's menu: sort, hide (with an undo), fit or reset its width. The "choose" button lists every column to show or hide, says how many are hidden, and resets. Saved in this browser.</li>
     <li><b>Pinned agents:</b> ☆ next to an agent's name (table or agent page) pins it, ★ unpins. Pins are saved in this browser only. Pinned agents sort to the top of the table, keeping the current sort among themselves.
       An agent page shows a strip of the pinned agents (in their colors, the current one bold); ◀ ▶ beside the current one move it earlier / later.</li>
     <li><b>Keyboard:</b> <b>PageUp / PageDown</b> (rebindable below) go to the previous / next pinned agent and put the cursor in the message box with To set to it, so you can type right away; this works even while the cursor is in the message box, but not while it holds a draft (that would change the draft's To). Without pins they keep the old behaviour: opening an agent from a project view keeps that project in the address (<code>?p=/project</code>), shows a strip of the project's agents, and PageUp / PageDown step through them while the focus is in the message box, the To field, or nowhere in particular. Ctrl+Enter sends; Escape closes help, the color picker and the column list.</li>
@@ -456,7 +473,7 @@ pre code { border: 0; padding: 0; background: none; }
         <span class="tools">
           <span class="grp"><span class="lbl">show</span><button class="btn tog" id="offline-toggle" type="button" title="Show agents whose session ended (offline)">offline <b>0</b></button><button class="btn tog" id="hidden-toggle" type="button" title="Show agents you hid by hand (hover a row, click hide)">hidden <b>0</b></button></span>
           <span class="grp"><span class="lbl">pins</span><button class="btn tog" id="pintop" type="button" title="On: pinned agents always sit at the top. Off: they're sorted with the rest">on top</button></span>
-          <span class="grp"><span class="lbl">columns</span><button class="btn" id="cols-pick" type="button" title="Choose which columns to show">choose</button><button class="btn" id="cols-auto" type="button" title="Fit every column to its content">fit</button><button class="btn" id="cols-reset" type="button" title="Undo column width changes">reset widths</button></span>
+          <span class="grp colsgrp"><span class="lbl">columns</span><button class="btn" id="cols-pick" type="button" aria-haspopup="true" aria-expanded="false" title="Choose which columns to show">choose</button><button class="btn" id="cols-auto" type="button" title="Fit every column to its content">fit</button><button class="btn" id="cols-reset" type="button" title="Undo column width changes">reset widths</button></span>
         </span></div>
       <div class="table-wrap">
         <table id="agents-table">
@@ -809,11 +826,15 @@ function applyTab() {
 // #help opens the help overlay over whatever view was showing; closing goes back to that view's hash
 let routed = false, helpBack = "#", focusNext = false;  // focusNext: the pin carousel navigated here, put the cursor in the message box
 const viewTo = () => view.kind === "agent" ? view.name : view.kind === "project" ? view.path : "";  // this page's recipient
+let helpFrom = null;  // what had the keyboard when help opened
 function route(e) {
   hideTip();
   const help = location.hash === "#help";
+  if (help && $("help").hidden) helpFrom = document.activeElement;
+  else if (!help && !$("help").hidden && helpFrom?.isConnected) setTimeout(() => helpFrom.focus());
   $("help").hidden = !help;
   if (help) {
+    $("help-close").focus();
     if (e && e.oldURL) helpBack = new URL(e.oldURL).hash || "#";
     loadHelp();
     if (routed) return;
@@ -1084,23 +1105,23 @@ const COLUMNS = [
     + (a.unread ? `<div><span class="unread" data-tip="messages delivered to ${esc(a.name)} it hasn't read yet">${a.unread} unread</span>${["held", "failed"].includes(a.wake?.status) ? ` <span class="unread wkbad" data-tip="${esc(a.wake.detail)}">wake ${esc(a.wake.status)}</span>` : ""}</div>` : "") },
   { id: "about", h: "Working on", asc: true, cls: "about", w: 0, key: a => a.about || null, cell: a => esc(a.about) || '<span class="sub">–</span>' },
   { id: "context", h: "Context", cls: "num ctxc", w: 90, key: a => a.window ? (a.context || 0) / a.window : a.context ?? null, cell: a => ctxCell(a) },
-  { id: "tokens", h: "Tokens out", cls: "num wide", w: 72, key: a => a.tokens ?? null, cell: a => tok(a.tokens) },
-  { id: "session", h: "Session", cls: "num wide", w: 64, key: a => -a.started_at, cell: (a, t) => hm(t - a.started_at) },
-  timeCol("last_active", "Last active", "A", "last hook activity", 84),
-  timeCol("last_sent", "Sent", "S", "last message it sent", 72),
-  timeCol("last_recv", "Received", "R", "last message delivered to it from another agent", 72),
-  timeCol("last_human", "Console", "C", "last message from you (the web console)", 72),
-  timeCol("last_prompt", "User", "U", "last prompt typed in its terminal", 72),
+  { id: "tokens", h: "Tokens out", cls: "num wide", w: 110, key: a => a.tokens ?? null, cell: a => tok(a.tokens) },
+  { id: "session", h: "Session", cls: "num wide", w: 92, key: a => -a.started_at, cell: (a, t) => hm(t - a.started_at) },
+  timeCol("last_active", "Last active", "A", "last hook activity", 116),
+  timeCol("last_sent", "Sent", "S", "last message it sent", 76),
+  timeCol("last_recv", "Received", "R", "last message delivered to it from another agent", 98),
+  timeCol("last_human", "Console", "C", "last message from you (the web console)", 94),
+  timeCol("last_prompt", "User", "U", "last prompt typed in its terminal", 76),
   { id: "dir", h: "Dir", asc: true, cls: "wide", w: 110, key: a => a.cwd || null,
     cell: a => `<div class="clip lclip" data-tip="${esc(a.cwd)}"><bdi>${esc(tilde(a.cwd)) || "–"}</bdi></div>` },
-  { id: "where", h: "Where (host · branch)", asc: true, cls: "wide", w: 140, key: a => [a.host, a.branch].filter(Boolean).join(" · ") || null,
+  { id: "where", h: "Where", tip: "host · branch", asc: true, cls: "wide", w: 140, key: a => [a.host, a.branch].filter(Boolean).join(" · ") || null,
     cell: a => `<div class="clip" data-tip="${esc([a.host, a.branch, tmuxLabel(a)].filter(Boolean).join(" · "))}">${esc([a.host, a.branch].filter(Boolean).join(" · ")) || "–"}</div>` },
-  { id: "projects", h: "Projects", asc: true, cls: "wide projs", w: 100, key: a => Object.keys(a.projects).sort().join(" ") || null, cell: a => Object.entries(a.projects).map(([p, sub]) => projLink(p, sub)).join("") },
+  { id: "projects", h: "Projects", asc: true, cls: "wide projs", w: 100, key: a => Object.keys(a.projects).sort().join(" ") || null, cell: a => Object.entries(a.projects).map(([p, sub]) => projLink(p, sub).replace(/>([^<]*)<\/a>$/, "><bdi>$1</bdi></a>")).join("") },
 ];
 // the timing group collapsed into one column: the most recent of the five, tagged with its letter; breakdown in the tooltip
 const TIME_COLS = COLUMNS.filter(c => c.g === "time");
 const timeMax = a => TIME_COLS.reduce((m, c) => (a[c.f] || 0) > (m ? a[m.f] : 0) ? c : m, null);
-const TIMES = { id: "times", h: "Times", tip: "most recent of " + TIME_COLS.map(c => `${c.tag} = ${c.h}`).join(", "), cls: "num wide", w: 80,
+const TIMES = { id: "times", h: "Times", tip: "most recent of " + TIME_COLS.map(c => `${c.tag} = ${c.h}`).join(", "), cls: "num wide", w: 92,
   key: a => { const m = timeMax(a); return m ? a[m.f] : null; },
   cell: (a, t) => { const m = timeMax(a); if (!m) return '<span class="sub">—</span>';
     const tip = TIME_COLS.map(c => `${c.tag}  ${c.h}: ${a[c.f] ? rel(a[c.f], t) + " (" + new Date(a[c.f] * 1000).toLocaleString() + ")" : "—"}`).join("\n");
@@ -1136,12 +1157,15 @@ function sortAgents(list) {
   return pref("pintop", "top") === "top" ? list.sort((a, b) => isPinned(b.name) - isPinned(a.name)) : list;
 }
 function renderHead() {
-  $("agents-head").innerHTML = shownCols().map(c => { const on = sortBy?.c === c.id;
-    // timing group toggle: ▸ on the collapsed "Times" column, ▾ on the first time column when expanded
-    const grp = c === TIMES ? `<button class="grp" type="button" data-tgrp title="Expand the timing columns">▸</button>`
-      : c === TIME_COLS[0] ? `<button class="grp" type="button" data-tgrp title="Collapse the timing columns into one">▾</button>` : "";
-    const x = c.fixed ? "" : `<button class="hide-x" type="button" data-hide="${c.id}" title="Hide this column (right-click a header also hides it)" aria-label="Hide ${esc(c.h)}">✕</button>`;
-    return `<th class="${c.cls || ""}" data-col="${c.id}" ${on ? `aria-sort="${sortBy.d > 0 ? "ascending" : "descending"}"` : ""} title="${esc(c.tip ? c.tip + "; " : "")}click to sort">${grp}${esc(c.h)}${on ? `<span class="arrow">${sortBy.d > 0 ? "▲" : "▼"}</span>` : ""}${x}</th>`; }).join("");
+  const shown = shownCols(), firstTime = shown.find(c => c.g === "time");
+  $("agents-head").innerHTML = shown.map(c => { const on = sortBy?.c === c.id;
+    // timing group toggle: ▸ on the collapsed "Times" column, ▾ on the first time column shown when expanded
+    const grp = c === TIMES ? `<button class="grp" type="button" data-tgrp aria-expanded="false" title="Show the five timing columns separately" aria-label="Show the five timing columns separately">▸</button>`
+      : c === firstTime ? `<button class="grp" type="button" data-tgrp aria-expanded="true" title="Collapse the timing columns into one" aria-label="Collapse the timing columns into one">▾</button>` : "";
+    const th = `<th class="${c.cls || ""}" data-col="${c.id}" aria-sort="${on ? (sortBy.d > 0 ? "ascending" : "descending") : "none"}" title="${esc(c.tip ? c.tip + ". " : "")}Click to sort, again to reverse, a third time for the default order. Right-click for more."`;
+    const arrow = `<span class="arrow" aria-hidden="true" data-first="${c.asc ? "▲" : "▼"}">${on ? (sortBy.d > 0 ? "▲" : "▼") : ""}</span>`, label = `<button class="sortb" type="button">${esc(c.h)}</button>`;
+    // right-aligned columns carry the arrow on the left, so the label still ends where the numbers do
+    return `${th}>${grp}${/\bnum\b/.test(c.cls || "") ? arrow + label : label + arrow}</th>`; }).join("");
 }
 
 function renderAgents() {
@@ -1158,8 +1182,12 @@ function renderAgents() {
   tog("offline-toggle", !hide, nOff); tog("hidden-toggle", showHid, nHid); tog("pintop", pref("pintop", "top") === "top", null);
   $("agent-scope").innerHTML = `${shown.length} agent${shown.length === 1 ? "" : "s"}` + (hide && nOff ? ` · ${nOff} offline` : "") + (!showHid && nHid ? ` · ${nHid} hidden` : "") + (q ? ` in ${projLink(q)} ${swatch(q)}<a href="#">clear</a>` : "");
   $("agents-empty").hidden = all.length > 0;
-  $("agents").innerHTML = shown.map(a => `<tr class="${state(a)}${reachOf(a) === "gone" ? " gone" : ""}${isPinned(a.name) ? " pinned" : ""}">`
+  // the rows are rebuilt (at least once a minute): put the keyboard back where it was
+  const fEl = $("agents").contains(document.activeElement) ? document.activeElement : null, fRow = fEl?.closest("tr");
+  const FOCUSABLE = "a[href], button, [tabindex]", fAt = fRow && [fRow.dataset.a, [...fRow.querySelectorAll(FOCUSABLE)].indexOf(fEl)];
+  $("agents").innerHTML = shown.map(a => `<tr data-a="${esc(a.name)}" class="${state(a)}${reachOf(a) === "gone" ? " gone" : ""}${isPinned(a.name) ? " pinned" : ""}">`
     + cols.map(c => `<td${c.cls ? ` class="${c.cls}"` : ""}>${c.cell(a, t)}</td>`).join("") + "</tr>").join("");
+  if (fAt) [...$("agents").rows].find(r => r.dataset.a === fAt[0])?.querySelectorAll(FOCUSABLE)[fAt[1]]?.focus({ preventScroll: true });
 }
 
 // agents table columns: drag a header's right edge to resize; widths persist per column id in "ab.colw"
@@ -1176,6 +1204,8 @@ function applyCols() {
   document.querySelectorAll("#agents-table th").forEach((th, i) => th.style.width = widthOf(cols[i]) ? widthOf(cols[i]) + "px" : "");
   $("agents-table").style.minWidth = cols.reduce((x, c) => x + widthOf(c), 0) + 180 + "px";  // 180 = room for "Working on"
   $("cols-reset").disabled = !Object.keys(colW).length;
+  const nh = hiddenCols().length;
+  $("cols-pick").innerHTML = "choose" + (nh ? `<b>${nh} hidden</b>` : "");
   $("cols-auto").hidden = innerWidth <= 760;  // the table is cards there
 }
 // headers are rebuilt on every sort/visibility change, so grips are re-attached each time
@@ -1185,45 +1215,104 @@ function addGrips() {
     const c = cols[i];
     if (!c.w) return;
     const g = document.createElement("span");
-    g.className = "grip"; g.title = "Drag to resize";
+    g.className = "grip"; g.title = "Drag to resize, double-click to fit the content";
     th.append(g);
     g.addEventListener("click", e => e.stopPropagation());  // a resize isn't a sort
+    g.addEventListener("dblclick", e => { e.stopPropagation(); fitCols(c.id); });
     g.addEventListener("pointerdown", e => {
       e.preventDefault(); g.setPointerCapture(e.pointerId);
       const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
       const move = ev => { colW[c.id] = Math.max(50, Math.round(w0 + ev.clientX - x0)); applyCols(); };
       g.addEventListener("pointermove", move);
-      g.addEventListener("pointerup", () => { g.removeEventListener("pointermove", move); saveW(); }, { once: true });
+      const done = () => { g.removeEventListener("pointermove", move); g.removeEventListener("pointerup", done); g.removeEventListener("pointercancel", done); saveW(); };
+      g.addEventListener("pointerup", done); g.addEventListener("pointercancel", done);
     });
   });
 }
-function buildHead() { renderHead(); addGrips(); applyCols(); renderColPop(); }
-const visChanged = () => { saveVis(); buildHead(); delete seen.agents; renderAgents(); };
-const hideCol = id => { if (!colVis.hidden.includes(id)) colVis.hidden.push(id); visChanged(); };
-// click a header: sort by it (numbers and times newest/largest first, text A-Z); again reverses. ▸/▾ toggles the timing group, ✕ hides.
+// headers are rebuilt, so the keyboard's place in them is put back
+function buildHead() {
+  const at = document.activeElement?.closest?.("#agents-head th")?.dataset.col;
+  renderHead(); addGrips(); applyCols(); renderColPop();
+  if (at) document.querySelector(`#agents-head th[data-col="${at}"] .sortb`)?.focus();
+}
+function visChanged() {
+  if (sortBy && !shownCols().some(c => c.id === sortBy.c)) { sortBy = null; setPref("sort", "null"); }  // no invisible sort
+  saveVis(); buildHead(); delete seen.agents; renderAgents();
+}
+// the columns that are hidden now (a hidden timing column doesn't count while the group is collapsed, nor "Times" while it's expanded)
+const hiddenCols = () => [...COLUMNS.filter(c => c.g !== "time" && !c.fixed), ...(colVis.timeOpen ? TIME_COLS : [TIMES])].filter(c => colVis.hidden.includes(c.id));
+function hideCol(id) {
+  if (colVis.hidden.includes(id)) return;
+  colVis.hidden.push(id); visChanged();
+  toast(`Hid the "${colById(id).h}" column`, { label: "undo", run() { colVis.hidden = colVis.hidden.filter(x => x !== id); visChanged(); } });
+}
+function showAllCols() { const ids = new Set(hiddenCols().map(c => c.id)); colVis.hidden = colVis.hidden.filter(x => !ids.has(x)); visChanged(); }
+// d: 1 ascending, -1 descending, 0 back to the default order
+function sortCol(c, d) { sortBy = d ? { c: c.id, d } : null; setPref("sort", JSON.stringify(sortBy)); buildHead(); renderAgents(); }
+// click a header: sort by it (numbers and times newest/largest first, text A-Z), again reverses, a third time returns to the default. ▸/▾ toggles the timing group.
 $("agents-head").addEventListener("click", e => {
   if (e.target.closest("[data-tgrp]")) { colVis.timeOpen = !colVis.timeOpen; return visChanged(); }
-  const hx = e.target.closest("[data-hide]");
-  if (hx) return hideCol(hx.dataset.hide);
   const th = e.target.closest("th[data-col]");
   if (!th) return;
-  const c = colById(th.dataset.col);
-  sortBy = sortBy?.c === c.id ? { c: c.id, d: -sortBy.d } : { c: c.id, d: c.asc ? 1 : -1 };
-  setPref("sort", JSON.stringify(sortBy));
-  buildHead(); renderAgents();
+  const c = colById(th.dataset.col), first = c.asc ? 1 : -1;
+  sortCol(c, sortBy?.c !== c.id ? first : sortBy.d === first ? -first : 0);
 });
+// right-click a header (or the menu key on it): everything that can be done to that column
+function colMenu(c, x, y) {
+  const m = $("colmenu"), on = sortBy?.c === c.id, nh = hiddenCols().length;
+  const item = (act, label, o = {}) => `<button type="button" role="menuitem" data-act="${act}"${o.on ? ' class="on"' : ""}${o.dis ? " disabled" : ""}>${esc(label)}</button>`;
+  m.dataset.col = c.id;
+  m.innerHTML = `<div class="mh">${esc(c.h)}</div>`
+    + item("asc", c.asc ? "Sort A to Z" : "Sort smallest / oldest first", { on: on && sortBy.d > 0 }) + item("desc", c.asc ? "Sort Z to A" : "Sort largest / newest first", { on: on && sortBy.d < 0 })
+    + item("nosort", "Default order (state, then recent)", { on: !sortBy }) + "<hr>"
+    + (c.g === "time" || c === TIMES ? item("tgrp", colVis.timeOpen ? "Collapse the timing columns into one" : "Show the five timing columns") : "")
+    + item("hide", "Hide this column", { dis: c.fixed }) + (nh ? item("showall", `Show all columns (${nh} hidden)`) : "") + item("pick", "Choose columns…")
+    + (c.w ? "<hr>" + item("fit", "Fit width to content") + item("resetw", "Default width", { dis: !(c.id in colW) }) : "");
+  m.hidden = false;
+  m.style.left = Math.max(4, Math.min(x, innerWidth - m.offsetWidth - 4)) + "px"; m.style.top = Math.max(4, Math.min(y, innerHeight - m.offsetHeight - 4)) + "px";
+  m.querySelector("button:not(:disabled)").focus();
+}
+function closeColMenu(refocus) {
+  const m = $("colmenu"); if (m.hidden) return;
+  m.hidden = true;
+  if (refocus) document.querySelector(`#agents-head th[data-col="${m.dataset.col}"] .sortb`)?.focus();
+}
 $("agents-head").addEventListener("contextmenu", e => {
   const th = e.target.closest("th[data-col]"), c = th && colById(th.dataset.col);
-  if (!c || c.fixed) return;
-  e.preventDefault(); hideCol(c.id);
+  if (!c) return;
+  e.preventDefault();
+  const r = th.getBoundingClientRect(), byKey = !e.clientX && !e.clientY;  // the menu key reports no position
+  colMenu(c, byKey ? r.left : e.clientX, byKey ? r.bottom : e.clientY);
 });
+$("colmenu").addEventListener("click", e => {
+  const act = e.target.closest("[data-act]")?.dataset.act, c = colById($("colmenu").dataset.col);
+  if (!act) return;
+  closeColMenu(act !== "hide" && act !== "pick");
+  if (act === "asc") sortCol(c, 1); else if (act === "desc") sortCol(c, -1); else if (act === "nosort") sortCol(c, 0);
+  else if (act === "tgrp") { colVis.timeOpen = !colVis.timeOpen; visChanged(); }
+  else if (act === "hide") hideCol(c.id); else if (act === "showall") showAllCols();
+  else if (act === "pick") setTimeout(() => $("cols-pick").click());  // after this click, which would close the popover again
+  else if (act === "fit") fitCols(c.id);
+  else if (act === "resetw") { delete colW[c.id]; saveW(); applyCols(); }
+});
+$("colmenu").addEventListener("keydown", e => {
+  const items = [...$("colmenu").querySelectorAll("button:not(:disabled)")], i = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus(); }
+  else if (e.key === "Escape") { e.stopPropagation(); closeColMenu(true); }
+  else if (e.key === "Tab") closeColMenu(true);
+});
+document.addEventListener("pointerdown", e => { if (!e.target.closest("#colmenu")) closeColMenu(false); });
+addEventListener("scroll", () => closeColMenu(false), true); addEventListener("resize", () => closeColMenu(false));
 // "columns" popover: a checklist of every column (the timing group as one row with its own expand box), plus reset
 function renderColPop() {
+  const f = $("colpop").contains(document.activeElement) ? document.activeElement : null;
+  const back = f && (f.dataset.vis ? `[data-vis="${f.dataset.vis}"]` : f.matches("[data-topen]") ? "[data-topen]" : "#colvis-reset");
   const row = (id, label, on, dis = false) => `<label><input type="checkbox" data-vis="${id}"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
   $("colpop").innerHTML = COLUMNS.filter(c => c.g !== "time").map(c => row(c.id, c.h, c.fixed || !colVis.hidden.includes(c.id), c.fixed)).join("")
-    + `<div class="grp-rows"><label><input type="checkbox" data-topen${colVis.timeOpen ? " checked" : ""}> timing group expanded</label>`
-    + (colVis.timeOpen ? TIME_COLS.map(c => row(c.id, c.h, !colVis.hidden.includes(c.id))).join("") : row("times", "Times (collapsed)", !colVis.hidden.includes("times"))) + "</div>"
-    + `<button class="btn" type="button" id="colvis-reset" title="Show every column again, timing group collapsed">reset columns</button>`;
+    + `<div class="grp-rows"><label title="Off: one Times column with the most recent of the five"><input type="checkbox" data-topen${colVis.timeOpen ? " checked" : ""}> Times as five separate columns</label>`
+    + (colVis.timeOpen ? TIME_COLS.map(c => row(c.id, c.h, !colVis.hidden.includes(c.id))).join("") : row("times", "Times (the most recent of the five)", !colVis.hidden.includes("times"))) + "</div>"
+    + `<button class="btn" type="button" id="colvis-reset" title="Show every column again, timing group collapsed, default order">reset columns</button>`;
+  if (back) $("colpop").querySelector(back)?.focus();
 }
 $("colpop").addEventListener("change", e => {
   const t = e.target;
@@ -1231,7 +1320,7 @@ $("colpop").addEventListener("change", e => {
   else if (t.dataset.vis) colVis.hidden = t.checked ? colVis.hidden.filter(x => x !== t.dataset.vis) : [...colVis.hidden, t.dataset.vis];
   visChanged();
 });
-$("colpop").addEventListener("click", e => { if (e.target.id === "colvis-reset") { colVis = { ...VIS0, hidden: [] }; visChanged(); } });
+$("colpop").addEventListener("click", e => { if (e.target.id === "colvis-reset") { colVis = { ...VIS0, hidden: [] }; sortBy = null; setPref("sort", "null"); visChanged(); } });
 // board posts: shown by default; hiding is a body class so nothing refetches
 const applyBoards = () => { const on = pref("boards", "show") === "show"; document.body.classList.toggle("noboard", !on); $("boards").setAttribute("aria-pressed", on); };
 $("boards").addEventListener("click", () => { setPref("boards", pref("boards", "show") === "show" ? "hide" : "show"); applyBoards(); });
@@ -1239,20 +1328,24 @@ applyBoards();
 $("hidden-toggle").addEventListener("click", () => { setPref("showhidden", pref("showhidden", "no") === "yes" ? "no" : "yes"); renderAgents(); renderTree(); });
 $("pintop").addEventListener("click", () => { setPref("pintop", pref("pintop", "top") === "top" ? "sorted" : "top"); renderAgents(); });
 $("cols-pick").addEventListener("click", e => {
-  const p = $("colpop"); p.hidden = !p.hidden;
+  const p = $("colpop"); p.hidden = !p.hidden; e.currentTarget.setAttribute("aria-expanded", String(!p.hidden));
   if (p.hidden) return;
   const r = e.currentTarget.getBoundingClientRect();
   p.style.left = Math.max(4, Math.min(r.left, innerWidth - p.offsetWidth - 4)) + "px"; p.style.top = r.bottom + 4 + "px";
+  p.querySelector("input:not(:disabled)")?.focus();
 });
-document.addEventListener("click", e => { if (!e.target.closest("#colpop, #cols-pick")) $("colpop").hidden = true; });
+const closeColPop = () => { $("colpop").hidden = true; $("cols-pick").setAttribute("aria-expanded", "false"); };
+document.addEventListener("click", e => { if (!e.target.closest("#colpop, #cols-pick")) closeColPop(); });
+addEventListener("scroll", e => { if (!$("colpop").contains(e.target)) closeColPop(); }, true);  // it is fixed in place: don't let it float away from its button
 $("offline-toggle").addEventListener("click", () => { setPref("offline", pref("offline", "hide") === "hide" ? "show" : "hide"); renderAgents(); renderTree(); });
-// auto-size: lay the table out by content once (no wrapping), read each header's width, keep "Working on" flexible
-$("cols-auto").addEventListener("click", () => {
+// fit: lay the table out by content once (no wrapping), read each header's width, keep "Working on" flexible. only = one column's id.
+function fitCols(only) {
   const t = $("agents-table"), ths = [...t.querySelectorAll("th")], cols = shownCols();
   ths.forEach(th => th.style.width = ""); t.classList.add("measuring");
-  ths.forEach((th, i) => { if (cols[i].w) colW[cols[i].id] = Math.min(420, Math.max(50, Math.ceil(th.getBoundingClientRect().width) + 2)); });
+  ths.forEach((th, i) => { if (cols[i].w && (!only || cols[i].id === only)) colW[cols[i].id] = Math.min(420, Math.max(50, Math.ceil(th.getBoundingClientRect().width) + 2)); });
   t.classList.remove("measuring"); saveW(); applyCols();
-});
+}
+$("cols-auto").addEventListener("click", () => fitCols());
 $("cols-reset").addEventListener("click", () => { colW = {}; saveW(); applyCols(); });
 buildHead();
 
@@ -1296,7 +1389,8 @@ function renderAgent(a) {
 function actTarget(f) {
   const sh = KIND(f.tool) === "shell", desc = sh && (f.desc || "").trim();
   if (desc) return `<span class="target" data-tip="${esc("$ " + f.target)}">${esc(desc)}</span>`;
-  return `<span class="target${sh ? " sh" : ""}" data-tip="${esc(f.target)}">${sh ? "$ " : ""}${esc(f.target)}</span>`;
+  const path = !sh && /^[\/~]/.test(f.target || "");  // a path is cut on the left, so its file name stays
+  return `<span class="target${sh ? " sh" : ""}${path ? " lclip" : ""}" data-tip="${esc(f.target)}">${sh ? "$ " : ""}${path ? `<bdi>${esc(f.target)}</bdi>` : esc(f.target)}</span>`;
 }
 
 // rename: inline input in the header; header re-renders pause while it's open
@@ -1710,7 +1804,8 @@ function suggest() {
     (b.v.toLowerCase().startsWith(q)) - (a.v.toLowerCase().startsWith(q))).slice(0, 10);
   const open = document.activeElement === inp && hits.length > 0 && !(hits.length === 1 && hits[0].v.toLowerCase() === q);
   box.hidden = !open; inp.setAttribute("aria-expanded", open);
-  sugAt = open ? Math.min(Math.max(sugAt, 0), hits.length - 1) : -1;
+  // typing pre-selects the best match; an empty box selects nothing, so Tab passes through without choosing a recipient
+  sugAt = !open ? -1 : Math.min(q ? Math.max(sugAt, 0) : sugAt, hits.length - 1);
   box.innerHTML = hits.map((n, i) => `<li role="option" data-v="${esc(n.v)}"${i === sugAt ? ' aria-selected="true"' : ""}><span ${n.v.startsWith("/") || n.v === "*" || n.v === "human" ? "" : cAttr(n.v)}>${esc(n.v)}</span><span class="sub">${esc(n.note)}</span></li>`).join("");
 }
 function pickSug(v) {
@@ -1724,7 +1819,7 @@ $("to").addEventListener("keydown", e => {
   const box = $("to-sug"), items = box.querySelectorAll("li");
   if (e.key === "Enter") e.preventDefault();  // Enter picks a suggestion, never sends: Ctrl+Enter in the message box does
   if (box.hidden || !items.length) { if (e.key === "ArrowDown") { suggest(); e.preventDefault(); } return; }
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sugAt = (sugAt + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; suggest(); }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sugAt = sugAt < 0 ? (e.key === "ArrowDown" ? 0 : items.length - 1) : (sugAt + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; suggest(); }
   else if (e.key === "Enter" || e.key === "Tab") { if (sugAt >= 0) { e.preventDefault(); pickSug(items[sugAt].dataset.v); } }
   else if (e.key === "Escape") { box.hidden = true; e.stopPropagation(); }
 });
@@ -1831,7 +1926,7 @@ async function loadHelp() {
 const closeHelp = () => { if (!$("help").hidden) location.hash = helpBack; };
 $("help-close").addEventListener("click", closeHelp);
 $("help").addEventListener("click", e => { if (e.target.id === "help") closeHelp(); });  // click on the dimmed backdrop
-document.addEventListener("keydown", e => { if (e.key === "Escape") { closeHelp(); $("inbox").hidden = true; $("cpick").hidden = true; $("colpop").hidden = true; } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { closeHelp(); $("inbox").hidden = true; $("cpick").hidden = true; if (!$("colpop").hidden) { closeColPop(); $("cols-pick").focus(); } closeColMenu(true); } });
 
 // --- color picker: a swatch ([data-pick]) opens it; saves via POST /color, null resets to the hashed default ---
 let pickFor = null;
@@ -1906,7 +2001,12 @@ $("keys-reset").addEventListener("click", () => { keys = { ...KEYS0 }; setPref("
 renderKeys();
 
 let toastTimer = null;
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 3000); }
+// action: {label, run} adds a button (e.g. undo); the toast then stays longer
+function toast(msg, action) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  if (action) { const b = document.createElement("button"); b.type = "button"; b.textContent = action.label; b.onclick = () => { t.hidden = true; action.run(); }; t.append(b); }
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, action ? 7000 : 3000);
+}
 
 // --- carousel strip on an agent page: the pinned agents (in pin order, ◀ ▶ move the current one), else the context project's agents ---
 function stripAgents() {
@@ -1957,7 +2057,7 @@ document.addEventListener("keydown", e => {
   if (!dir || !$("help").hidden) return;
   const f = document.activeElement, free = !f || f === document.body || ["text", "to"].includes(f.id);
   if (pins.length && !free && f.matches("input, textarea, select, [contenteditable]")) return;  // e.g. the rename box
-  if ((pins.length || free) && $("text").value.trim()) { toast("Send or clear the draft first: switching agents would change its To"); return; }
+  if ((pins.length || free && view.kind === "agent" && stripAgents().length > 1) && $("text").value.trim()) { toast("Send or clear the draft first: switching agents would change its To"); return; }
   if (pins.length) {
     e.preventDefault();
     const i = view.kind === "agent" ? pins.indexOf(view.name) : -1;
