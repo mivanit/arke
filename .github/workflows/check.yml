@@ -1,5 +1,6 @@
 name: Arke checks
-on: [push, pull_request, workflow_dispatch]
+# workflow_call: the demo site's deploy (pages.yml) runs these first
+on: [push, pull_request, workflow_dispatch, workflow_call]
 
 permissions:
   contents: read

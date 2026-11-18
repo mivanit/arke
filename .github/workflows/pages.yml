@@ -1,0 +1,41 @@
+name: Demo site
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push replaces a deploy that is still waiting; one already running finishes
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    uses: ./.github/workflows/check.yml
+  deploy:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the pinned Three.js and highlight.js files (checksummed)
+        run: python3 install-service.py --assets-only
+      - name: Build the demo (web/ with demo/fake-api.js in place of the bus)
+        run: python3 demo/build.py _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

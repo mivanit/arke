@@ -11,7 +11,7 @@ HARNESS ?= claude
 LIVE_KEY = $(if $(filter claude,$(HARNESS)),ANTHROPIC_API_KEY,CODEX_API_KEY)
 
 .DEFAULT_GOAL := check
-.PHONY: check format check-format typing test test-python test-browser setup-browser test-container test-mocked test-live
+.PHONY: check format check-format typing test test-python test-browser setup-browser test-container test-mocked test-live demo demo-build
 
 check: check-format typing test
 
@@ -61,3 +61,10 @@ test-live:
 	$(CONTAINER) build --build-arg PYTHON_VERSION=$(PYTHON_VERSION) -f Dockerfile.test -t $(TEST_IMAGE) .
 	$(CONTAINER) build --build-arg TEST_IMAGE=$(TEST_IMAGE) -f Dockerfile.live -t arke-live-test .
 	$(CONTAINER) run --rm --shm-size=1g -e $(LIVE_KEY) -e ARKE_LIVE_MODEL arke-live-test $(HARNESS)
+
+# The consoles on invented data, no bus needed (demo/README.md). Needs the 3D assets: python3 install-service.py --assets-only
+demo-build:
+	python3 demo/build.py _site
+
+demo: demo-build
+	python3 -m http.server -d _site 8000

@@ -2,6 +2,8 @@
 
 A message bus that lets Claude Code and Codex agents find and message each other on one machine or across machines on a Tailscale tailnet (the server listens on localhost and, optionally, its Tailscale address; anything else needs your own proxy or tunnel). It includes a web console, project boards, transcripts and activity analytics. The server and client use only the Python standard library and speak JSON over HTTP.
 
+**[Live demo](https://mivanit.github.io/arke/)** of the console and analytics pages, on invented data (or run it locally with `make demo`; see [demo/](demo/README.md)).
+
 Arke runs on **Linux with Python 3.12 or newer**. Terminal wake-ups use tmux; Git supplies project and repository information. Tailscale and phone notifications are optional. Windows and macOS are not supported.
 
 > **Use a trusted network!!!** By default Arke has **NO AUTHENTICATION**. Browser API access is restricted to the bus's own origin, but anything that can reach it is fully trusted: it can act as any agent (including taking over a running agent's name and unread mail), send as `human`, and read any text file the bus's user can read (the file viewer trusts whatever working directory an agent reports). That includes other user accounts on the bus host, since they can reach `127.0.0.1`. Keep the service off the public internet.

@@ -8,7 +8,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const read = name => fs.readFileSync(path.join(path.dirname(__dirname), 'web', name), 'utf8');  // the pages live in ../web
 // the event-log reader both analytics pages' load() calls
 const readEventsSrc = (s => s.slice(s.indexOf('async function readEvents('), s.indexOf('// ---------- view state')))(read('analytics-page.js'));
@@ -1954,4 +1954,52 @@ async function analyticsRefreshDuringBrush() {
   console.log('ok: event/history responses preserve a real brush, release outside zooms, and lost capture resumes rendering');
 }
 
-(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); })().catch(e => { console.error(e); process.exitCode = 1; });
+// The static demo (demo/build.py + demo/fake-api.js), served from a subpath as GitHub Pages does: every page draws from
+// the fake bus with no errors, and no request goes unanswered (a new endpoint needs a route in the fake).
+async function demoSite() {
+  const { chromium } = playwright(), root = path.dirname(__dirname), out = fs.mkdtempSync(path.join(os.tmpdir(), 'arke-demo-'));
+  const built = spawnSync('python3', [path.join(root, 'demo', 'build.py'), out], { encoding: 'utf8' });
+  assert.equal(built.status, 0, built.stderr);
+  const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', md: 'text/markdown' };
+  const browser = await chromium.launch({ executablePath: chrome(chromium), headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  try {
+    const open = async file => {
+      const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      p.problems = []; p.on('pageerror', e => p.problems.push(e.message));
+      await p.route('**/*', route => {
+        const u = new URL(route.request().url()), f = path.join(out, u.pathname.replace(/^\/arke\//, '') || 'index.html');
+        if (u.hostname !== 'arke-demo.test' || !u.pathname.startsWith('/arke/') || !fs.existsSync(f)) { p.problems.push('not served: ' + u.href); return route.fulfill({ status: 404, contentType: 'text/html', body: 'not found' }); }
+        return route.fulfill({ contentType: types[f.split('.').pop()], body: fs.readFileSync(f) });
+      });
+      await p.goto('http://arke-demo.test/arke/' + file);
+      return p;
+    };
+    const clean = async (p, what) => { assert.deepEqual(await p.evaluate(() => ArkeDemo.misses), [], what + ': every request has a fake'); assert.deepEqual(p.problems, [], what); };
+
+    let p = await open('');
+    await p.waitForFunction(() => document.querySelectorAll('#agents tr').length >= 6 && document.querySelectorAll('#feed .msg').length > 10);
+    assert.match(await p.textContent('#agent-scope'), /1 offline/, 'the agent that ended is counted as offline');
+    assert.equal(await p.getAttribute('#analytics', 'href'), 'analytics.html');
+    await p.fill('#to', 'trainer'); await p.fill('#text', 'a message typed into the demo');
+    await p.click('#compose button[type="submit"]');
+    await p.waitForFunction(() => document.querySelector('#feed .msg')?.textContent.includes('a message typed into the demo'));
+    await p.evaluate(() => { location.hash = '#agent/reviewer'; });
+    await p.waitForFunction(() => document.querySelectorAll('#transcript li.t').length > 5 && document.querySelectorAll('#files li').length > 3);
+    await p.evaluate(() => { location.hash = '#help'; });
+    await p.waitForFunction(() => document.getElementById('help-text').textContent.includes('message bus'));
+    await clean(p, 'console');
+
+    p = await open('analytics.html');
+    await p.waitForFunction(() => M && M.lanes.size >= 8 && M.msgs.length > 50 && M.procs.length > 100 && /events/.test(document.getElementById('status').textContent));
+    await p.waitForFunction(() => /CPU avg/.test(document.body.textContent), null, { timeout: 10000 });  // the machine chart drew: horatio's history is faked too
+    await clean(p, '2D analytics');
+
+    p = await open('analytics3d.html');
+    await p.waitForFunction(() => window.ab3d?.files().length > 20 && /events/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    assert.equal(await p.textContent('#conn'), '', 'the 3D page reports no errors');
+    await clean(p, '3D analytics');
+  } finally { await browser.close(); fs.rmSync(out, { recursive: true, force: true }); }
+  console.log('ok: the static demo draws the console, both analytics pages and the 3D city from the fake bus, from a subpath');
+}
+
+(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); await demoSite(); })().catch(e => { console.error(e); process.exitCode = 1; });
