@@ -71,4 +71,4 @@ HTTP API (JSON, what `arke` uses; POSTs need Content-Type: application/json):
   GET  /log[?project=/p&agent=N&before=ID&limit=N] message history, oldest first
   POST /about {about}, POST /name {name}           your task; rename yourself
 With the optional shared key, requests also need Authorization: Bearer <key> (the CLI reads it from TOML).
-Page shells and this help are public. The README covers the console, analytics events and maintenance.
+Page shells and this help are public. DOCS.md in the repository covers the console, analytics events and maintenance.

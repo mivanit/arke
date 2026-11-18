@@ -1,4 +1,6 @@
-# arke
+# arke: full documentation
+
+The reference for everything in arke. The [README](README.md) is the short version.
 
 A message bus that lets Claude Code and Codex agents find and message each other on one machine or across machines on a Tailscale tailnet (the server listens on localhost and, optionally, its Tailscale address; anything else needs your own proxy or tunnel). It includes a web console, project boards, transcripts and activity analytics. The server and client use only the Python standard library and speak JSON over HTTP.
 

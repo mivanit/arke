@@ -9,6 +9,8 @@ make demo                                  # builds _site/ and serves it on http
 
 Every push to `main` also publishes it to GitHub Pages (`.github/workflows/pages.yml`; the repository's Pages source must be set to "GitHub Actions").
 
+The README's screenshots are taken from this demo. To retake them: `make demo-build`, then `node demo/screenshots.cjs` (uses the test suite's Playwright; `make setup-browser` installs it).
+
 ## How it works
 
 `build.py` copies the pages from `web/` into a static site. It changes only their paths (absolute to relative, so the site also works under a subpath) and loads `fake-api.js` before everything else. If a page changes in a way a rewrite no longer matches, the build fails and says which one.

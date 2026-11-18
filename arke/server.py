@@ -3638,7 +3638,7 @@ def refuse_empty_start() -> None:
         raise SystemExit(
             f"no database at {STATE_DIR / 'state.sqlite3'}, but {', '.join(map(str, found))} exists, so this bus "
             "has run before and a new one would reuse its message ids. Moving from agentbus: run its migration "
-            "script (migrate_from_agentbus.py). Otherwise restore a backup (see README), "
+            "script (migrate_from_agentbus.py). Otherwise restore a backup (see DOCS.md), "
             "or move those files aside to start an empty bus."
         )
 

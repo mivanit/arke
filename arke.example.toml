@@ -4,7 +4,7 @@
 [server]
 port = 7777
 tailscale = false
-experimental_require_key = false     # experimental, NO GUARANTEES; see README before enabling
+experimental_require_key = false     # experimental, NO GUARANTEES; see DOCS.md before enabling
 # key_file = ".local/key"             # the default; used only when experimental_require_key = true
 # state_dir = ".local/server"
 # log_file = ".local/server/log.jsonl"
