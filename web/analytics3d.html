@@ -93,7 +93,7 @@ details.arr { position: relative; } details.arr > summary { cursor: pointer; lis
   <label><input type="checkbox" id="thuman" checked> human</label>
   <label title="Show reads as roots under the city, with see-through plots (R)"><input type="checkbox" id="roots" checked> roots</label>
   <label title="Lines from each commit to the files it touched and to the agent that committed"><input type="checkbox" id="tgit" checked> git lines</label>
-  <span class="seg"><button class="btn" type="button" data-preset="south" title="Face the machine plane: cpu / memory / gpu over time, with a plane per busy process behind it (1)">machine</button><button class="btn" type="button" data-preset="west" title="Face each agent's total processes over time (2)">processes</button><button class="btn" type="button" data-preset="east" title="Face the git commits, a lane per repo (3)">git</button><button class="btn" type="button" data-preset="city" title="Top-down onto the city (4)">city</button><button class="btn" type="button" data-preset="up" title="Look up the agents' history from below the present (5)">up ↑</button><button class="btn" type="button" data-preset="side" title="Agents' history from the side, time left to right (6)">side</button></span>
+  <span class="seg"><button class="btn" type="button" data-preset="south" title="The machine's row (cpu / memory / gpu over time) and a row per agent's processes beside it (1)">machine</button><button class="btn" type="button" data-preset="east" title="Face the git commits, a lane per repo (2)">git</button><button class="btn" type="button" data-preset="city" title="Top-down onto the city (3)">city</button><button class="btn" type="button" data-preset="up" title="Look up the agents' history from below the present (4)">up ↑</button><button class="btn" type="button" data-preset="side" title="Agents' history from the side, time left to right (5)">side</button></span>
   <button class="btn" type="button" id="home" title="Reset the camera (0)">reset view</button>
   <button class="btn" type="button" id="fpbtn" aria-pressed="false" title="First person (F): mouse to look, WASD to move, space/E up, ctrl (or Q/C) down, shift to sprint, Esc to leave">walk</button>
   <label id="fpspeedl" title="First-person speed (units per second; wheel while walking)">speed <input type="range" id="fpspeed" min="10" max="300" step="10"></label>
@@ -110,7 +110,6 @@ details.arr { position: relative; } details.arr > summary { cursor: pointer; lis
     <span class="sub" style="grid-column: 1 / -1">plus each face's own offset:</span>
     <label for="aoc">city (below)</label><input type="range" id="aoc" min="-60" max="200" step="5">
     <label for="aos">machine &amp; processes</label><input type="range" id="aos" min="-30" max="200" step="5">
-    <label for="aow">agents' totals</label><input type="range" id="aow" min="-30" max="200" step="5">
     <label for="aoe">git commits</label><input type="range" id="aoe" min="-30" max="200" step="5">
     <span class="sub" style="grid-column: 1 / -1">drag a handle (or shift-drag the city or an agent column) to move it</span>
     <button class="btn" type="button" id="gfree" title="Unpin every agent and let the layout move them">free all agents</button>
@@ -129,7 +128,7 @@ details.arr { position: relative; } details.arr > summary { cursor: pointer; lis
 <div id="stage">
   <div id="labels"></div>
   <div id="fphud" hidden>first person · mouse looks (click to capture) · WASD move · space/E up · ctrl or Q/C down · shift sprint ×3 · Esc back to orbit</div>
-  <div id="help" title="click to hide">Below: the files as a city (footprint = log file size, height = edits, roots under the see-through plots = reads, pale lots = room for new files). Above it, each agent is a column through time: the present at the bottom, the past rising; wider, brighter = more tool calls / busy. Level links = messages; lines down to a roof = touches. Agents sit near the agents they message. Drag to orbit, right-drag to pan, wheel to zoom; drag an agent's base block to move and pin it, right-click it to pin / free. Around the agents: the machine with a plane per busy process (1), each agent's total processes (2), git commits per repo (3). Click a building or a column for details. (click to hide)</div>
+  <div id="help" title="click to hide">Below: the files as a city (footprint = log file size, height = edits, roots under the see-through plots = reads, pale lots = room for new files). Above it, each agent is a column through time: the present at the bottom, the past rising; wider, brighter = more tool calls / busy. Level links = messages; lines down to a roof = touches. Agents sit near the agents they message. Drag to orbit, right-drag to pan, wheel to zoom; drag an agent's base block to move and pin it, right-click it to pin / free. Around the agents: the machine's row with a row per agent's processes beside it (1), git commits per repo (2). Click a building or a column for details. (click to hide)</div>
 </div>
 <div id="tip" hidden></div>
 <aside id="pane" hidden aria-label="Details">
@@ -221,9 +220,9 @@ let fileSel = "", agentSel = "";  // range, winNow, projSel: analytics-page.js
 // time of the edit) onto the roof of the file's building.
 const CW = 240, CD = 170, SLAB = 0.5, HMAX = 42;
 // where things sit and how big they are (the "arrange" controls; remembered): city offset/scale, graph offset/scale, time height
-// oc / os / ow / oe: each face's own offset, added to the toolbar's gap (which moves every face together): the city below,
-// the south (machine), west (processes) and east (git) planes
-const ARR0 = { cx: 0, cz: 0, cs: 1, ch: 1, gx: 0, gz: 0, gs: 1, tl: 240, oc: 0, os: 0, ow: 0, oe: 0 };
+// oc / os / oe: each face's own offset, added to the toolbar's gap (which moves every face together): the city below,
+// the south (machine and processes) and east (git) planes
+const ARR0 = { cx: 0, cz: 0, cs: 1, ch: 1, gx: 0, gz: 0, gs: 1, tl: 240, oc: 0, os: 0, oe: 0 };
 let ARR = { ...ARR0 };
 try { ARR = { ...ARR0, ...JSON.parse(pref("an.3arr", "{}")) }; } catch (e) { console.warn("bad saved arrangement, using defaults", e); }
 const saveArr = () => setPref("an.3arr", JSON.stringify(ARR));
@@ -391,7 +390,7 @@ function draw() { pending = false; if (fp) return; try { nearDetail(); } catch (
 function home() {
   // the scene spans from the deepest root (-rootDepth) up to the window start (YP + TL)
   // and across from the graph's left edge to the panel's right edge
-  const span = YP + TL + rootDepth, x0 = Math.min(planeAt.west() - 20, CXw(-CW / 2)), x1 = Math.max(planeAt.east() + 20, CXw(CW / 2));
+  const span = YP + TL + rootDepth, x0 = Math.min(cubeBox().x0 - 50, CXw(-CW / 2)), x1 = Math.max(planeAt.east() + 20, CXw(CW / 2));
   const back = Math.max(1, 1.45 / Math.max(0.3, camera.aspect), (x1 - x0) / (CW * 1.5)) * span / (62 + TL);
   VIEW_HOME.target.y = qn("ty", -rootDepth + span * 0.42); VIEW_HOME.target.x = qn("tx", (x0 + x1) / 2 - 20);
   camera.position.copy(VIEW_HOME.pos).sub(new THREE.Vector3(0, 125, 0)).multiplyScalar(back).add(VIEW_HOME.target);
@@ -528,18 +527,18 @@ async function loadHoratio(w0, w1) {
   })();
   return request.promise;
 }
-// ---------- the three side planes around the agents' cube (x: west -> east, z: north -> south, the default camera looks from the south) ----------
-// south (+z): the machine (horatio), west (-x): the agents' processes, east (+x): git commits per repo. Time runs up y, as in the columns.
+// ---------- the two side planes around the agents' cube (x: west -> east, z: north -> south, the default camera looks from the south) ----------
+// south (+z): the machine (horatio) and each agent's processes, east (+x): git commits per repo. Time runs up y, as in the columns.
 const cubeBox = () => ({ x0: toX(0) - 4, x1: toX(LW) + 4, z0: toZ(0) - 4, z1: toZ(LH) + 4 });
-// a preset facing one plane hides the other two (and their labels) until the camera is moved by hand or reset
+// a preset facing one plane hides the other (and its labels) until the camera is moved by hand or reset
 let focusPlane = null;
 function applyFocus() {
   for (const o of world.children) if (o.userData.plane) o.visible = (!focusPlane || o.userData.plane === focusPlane) && (o.name !== "git" || $("tgit").checked);
   requestRender();
 }
 const gapAll = () => Number($("gap").value);
-const planeAt = { south: () => cubeBox().z1 + 30 + gapAll() + ARR.os, west: () => cubeBox().x0 - 30 - gapAll() - ARR.ow, east: () => cubeBox().x1 + 30 + gapAll() + ARR.oe };
-let planeSpan = { south: [0, 1], west: [0, 1], east: [0, 1] };  // each plane's extent along its own horizontal axis (for the presets)
+const planeAt = { south: () => cubeBox().z1 + 30 + gapAll() + ARR.os, east: () => cubeBox().x1 + 30 + gapAll() + ARR.oe };
+let planeSpan = { south: [0, 1], southZ: [0, 1], east: [0, 1] };  // each plane's extent along its own horizontal axis (for the presets)
 // samples -> [{s, y, h}]: each sample drawn from its time up to the next one's (or a typical step), so the ribbon is continuous
 function spans(list, Y, cap) {
   const out = [];
@@ -568,113 +567,59 @@ function drawPanel(w0, w1, Y, P, buildingAt) {
   };
   const tick = (v, html, color) => labels.push({ v, html: `<span class="tick"${color ? ` style="color:${esc(color)}"` : ""}>${html}</span>`, anchor: "below", pri: 4e8, tidy: true });
 
-  // ----- process samples in the window, per agent: totals and per-process series (top lists), plus lifetimes -----
-  const byAgent = new Map(), life = new Map();
+  // ----- process samples in the window, per agent: the totals of each sample -----
+  const byAgent = new Map();
   for (const e of namedProcs(raw, X3.procs)) {
-    for (const s of e.started || []) life.set(s.pid + "@" + s.agent, { ...s, end: null });
-    for (const s of e.ended || []) { const o = life.get(s.pid + "@" + s.agent); if (o) o.end = e.ts; }
     if (e.ts < w0 - 60 || e.ts > w1) continue;
     for (const [name, a] of Object.entries(e.agents || {})) { if (!P.has(name)) continue;
-      let g = byAgent.get(name); if (!g) byAgent.set(name, g = { tot: [], procs: new Map() });
-      g.tot.push({ ts: e.ts, a });
-      for (const t of a.top || []) { let p = g.procs.get(t.pid); if (!p) g.procs.set(t.pid, p = { pid: t.pid, cmd: t.cmd, list: [] }); p.list.push({ ts: e.ts, t }); } }
+      let g = byAgent.get(name); if (!g) byAgent.set(name, g = { tot: [] });
+      g.tot.push({ ts: e.ts, a }); }
   }
-  for (const [n, g] of byAgent) for (const p of g.procs.values()) p.life = life.get(p.pid + "@" + n) || null;
 
-  // ----- south: the machine plane, and in front of it (toward the agents) one plane per busy process -----
-  // Every plane shares the machine's lanes and scale: a process's cpu column sits right behind the machine's cpu column, at the
-  // same time, as a share of the whole machine (cpu / cores, memory / total memory), so they line up.
+  // ----- south: a grid of rows running out from the agents' cube (along z). The machine's row is at the west end, then a row per
+  // agent, in the agents' west-to-east order. Along every row the lanes are the same: cpu, memory (then gpu and gpu memory, machine
+  // only), so an agent's cpu sits beside the machine's cpu at the same time. Column side = value. -----
   {
     const mets = [["cpu", "cpu %", "var(--accent)"], ["mem", "memory %", "var(--idle)"], ["gpu", "gpu util %", "var(--warn)"], ["gmem", "gpu memory %", "var(--human)"]];
-    const lw = (B.x1 - B.x0) / mets.length - 4, side = Math.min(lw, 24), laneX = i => B.x0 + i * (lw + 4) + lw / 2, ground = tcolor("var(--ground)");
-    const cores = Math.max(1, Number($("cores").value) || X3.machine?.cores || 16);
-    const memTot = (X3.hor?.length && X3.hor[X3.hor.length - 1].memTot) || (X3.machine?.mem_total_mb ? X3.machine.mem_total_mb / 1024 : 64);
-    // the processes that get a plane: the busiest NPROC by cpu-seconds in the window; the rest of each agent's load is "other"
-    const NPROC = 10, DZ = 9, ranked = [];
-    for (const [n, g] of byAgent) for (const p of g.procs.values()) { let cs = 0; for (let i = 0; i < p.list.length; i++) cs += (p.list[i].t.cpu || 0) * Math.min(60, (p.list[i + 1]?.ts ?? p.list[i].ts + 15) - p.list[i].ts); if (p.list.length) ranked.push({ n, p, cs }); }
-    ranked.sort((a, b) => b.cs - a.cs);
-    const shown = ranked.slice(0, NPROC).sort((a, b) => a.n < b.n ? -1 : a.n > b.n ? 1 : b.cs - a.cs), shownPid = new Set(shown.map(s => s.n + "@" + s.p.pid));
-    const other = [];  // per sample time: every agent's total minus its shown processes
-    if (ranked.length > shown.length) {
-      const at = new Map();
-      for (const [n, g] of byAgent) for (const s of g.tot) { const o = at.get(s.ts) || { ts: s.ts, cpu: 0, rss: 0 }; o.cpu += s.a.cpu || 0; o.rss += s.a.rss_mb || 0;
-        for (const t of s.a.top || []) if (shownPid.has(n + "@" + t.pid)) { o.cpu -= t.cpu || 0; o.rss -= t.rss_mb || 0; } at.set(s.ts, o); }
-      other.push(...[...at.values()].sort((a, b) => a.ts - b.ts));
-    }
-    const planesN = shown.length + (other.length ? 1 : 0);
-    // the machine plane is nearest the agents; process planes layer outward (south) behind it, "other" outermost
-    const zS = planeAt.south(), zOfK = k => zS + side + 4 + k * DZ;
-    planeSpan.south = [B.x0, B.x1];
-    mets.forEach(([, label], i) => { const x = B.x0 + i * (lw + 4); fpush(x, YP, zS, x, YP + TL, zS); fpush(x, YP, zS, x + lw, YP, zS);
-      back(x + lw / 2, zS - 0.2, lw, 0.1, tcolor(mets[i][2]));
-      tick(new THREE.Vector3(x + lw / 2, YP - 2, zS), `${label} <span class="m">(0–100)</span>`); });
-    cap(new THREE.Vector3((B.x0 + B.x1) / 2, YP + TL + 5, zS), `machine (horatio)${planesN ? ` · ${planesN} process planes behind it` : ""}`);
+    const names = [...byAgent.keys()].sort((a, b) => P.get(a).x - P.get(b).x), ground = tcolor("var(--ground)");
+    const rows = 1 + names.length, U = Math.min(28, (B.x1 - B.x0) / rows), S = Math.max(2, Math.min(24, U - 4));
+    const zS = planeAt.south(), rowX = r => B.x0 + r * U + U / 2, laneZ = i => zS + 4 + i * (S + 4) + S / 2, zEnd = n => zS + 4 + n * (S + 4);
+    let maxCpu = 100, maxRss = 256;
+    for (const g of byAgent.values()) for (const s of g.tot) { maxCpu = Math.max(maxCpu, s.a.cpu || 0); maxRss = Math.max(maxRss, s.a.rss_mb || 0); }
+    planeSpan.south = [B.x0, B.x0 + rows * U]; planeSpan.southZ = [zS, zEnd(mets.length)];
+    // each row: a base line along it, an upright at its inner end, and its name at its outer end
+    const row = (r, lanes, html, color) => { const x = rowX(r) - U / 2;
+      fpush(x, YP, zS, x, YP, zEnd(lanes)); fpush(x, YP, zS, x, YP + TL, zS);
+      tick(new THREE.Vector3(rowX(r), YP - 2, zEnd(lanes) + 1), html, color); };
+    fpush(B.x0, YP, zS, B.x0 + rows * U, YP, zS);
+    row(0, mets.length, "machine");
+    mets.forEach(([, label, color], i) => {
+      back(rowX(0) - S / 2 - 0.6, laneZ(i), 0.1, S, tcolor(color));
+      labels.push({ v: new THREE.Vector3(B.x0 - 1, YP, laneZ(i)), html: `<span class="tick">${label}${i < 2 ? "" : ' <span class="m">(machine only)</span>'}</span>`, anchor: "r", pri: 4e8, tidy: true }); });
+    cap(new THREE.Vector3((planeSpan.south[0] + planeSpan.south[1]) / 2, YP + TL + 5, zS), `machine (horatio)${names.length ? " · each agent's processes" : ""}`);
+    if (names.length) labels.push({ v: new THREE.Vector3(B.x0 + U, YP + TL + 1, zS), html: `<span class="tick">machine: full width = 100% · agents: full width = ${Math.round(maxCpu)}% of a core, ${Math.round(maxRss)} MB</span>`, anchor: "l", pri: 3e8 });
     const items = [], colors = mets.map(m => tcolor(m[2]));
     if (X3.hor?.length) {
       for (const sp of spans(X3.hor.filter(r => r.ts >= w0 - 30 && r.ts <= w1), Y, 120)) mets.forEach(([k], i) => { const v = sp.s[k];
-        if (v != null && isFinite(v)) items.push({ kind: "machine", sp, i, v: Math.max(0, Math.min(100, v)), z: zS + side / 2 + 0.5, c: colors[i].clone().lerp(ground, 0.15) }); });
+        if (v != null && isFinite(v)) items.push({ kind: "machine", sp, x: rowX(0), i, a: Math.max(0.35, S * Math.max(0, Math.min(100, v)) / 100), c: colors[i].clone().lerp(ground, 0.15) }); });
     } else if (X3.horNote) notes.push(X3.horNote);
-    // process planes: a faint backplate over the cpu and memory lanes, a label, the columns, the lifetime as a thin line
-    const strokes = [], scols = [], sinfo = [];
-    const procPlane = (k, name, label, list, c, extra) => {
-      const z = zOfK(k);
-      fpush(laneX(0) - lw / 2, YP, z, laneX(1) + lw / 2, YP, z);  // a thin base line marks the plane
-      labels.push({ v: new THREE.Vector3(B.x0 - 1, YP, z), html: `<span class="tick" style="color:${esc("#" + c.getHexString())}">${label}</span>`, anchor: "r", pri: 2e8 + (planesN - k), tidy: true });
-      for (const sp of spans(list, Y, 60)) {
-        const v = [Math.min(100, sp.s.cpu / cores), Math.min(100, sp.s.rss / 1024 / memTot * 100)];
-        v.forEach((x, i) => items.push({ kind: "proc", sp, i, v: x, z, c: i ? c.clone().lerp(ground, 0.45) : c, name, extra }));
-      }
-    };
-    shown.forEach(({ n, p }, k) => {
-      const c = tcolor(colorOf(n)), list = p.list.map(s => ({ ts: s.ts, cpu: s.t.cpu || 0, rss: s.t.rss_mb || 0 }));
-      procPlane(k, n, `${esc(n)} · ${esc(String(p.cmd || "").split(/\s+/).slice(0, 3).join(" ").slice(0, 40))}`, list, c, p);
-      const a = p.life?.start ?? p.list[0].ts, b = p.life?.end ?? (p.life ? w1 : p.list[p.list.length - 1].ts), z = zOfK(k);
-      strokes.push(laneX(0), Y(Math.max(w0, a)), z, laneX(0), Y(Math.min(w1, b)), z); scols.push(c.r, c.g, c.b, c.r, c.g, c.b); sinfo.push({ n, p, a, b });
-    });
-    if (other.length) procPlane(shown.length, "other", `other processes (${ranked.length - shown.length})`, other, tcolor("var(--muted)"), null);
+    names.forEach((n, k) => { const c = tcolor(colorOf(n)), pale = c.clone().lerp(ground, 0.5);
+      row(k + 1, 2, esc(n), colorOf(n));
+      for (const sp of spans(byAgent.get(n).tot, Y, 60)) { const a = sp.s.a;
+        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 0, a: S * (0.15 + 0.85 * Math.min(1, (a.cpu || 0) / maxCpu)), c });
+        items.push({ kind: "agent", n, sp, x: rowX(k + 1), i: 1, a: S * (0.15 + 0.85 * Math.min(1, (a.rss_mb || 0) / maxRss)), c: pale }); } });
     const mesh = instanced(items.length, new THREE.MeshLambertMaterial());
-    items.forEach((it, j) => { const a = Math.max(it.kind === "proc" ? 0.8 : 0.35, side * it.v / 100);
-      setBox(mesh, j, laneX(it.i), it.sp.y, it.z, a, it.sp.h, a, it.c); });
+    items.forEach((it, j) => setBox(mesh, j, it.x, it.sp.y, laneZ(it.i), it.a, it.sp.h, it.a, it.c));
     mesh.userData = { group: "panel", info: j => { const it = items[j], r = it.sp.s, when = `<span class="m">${dayOf(r.ts)} ${clock(r.ts, true)}</span>`;
-      if (it.kind === "proc") {
-        const head = it.extra ? `<b>${esc(it.name)}</b> pid ${it.extra.pid} ${when}\n${esc(String(it.extra.cmd || "").slice(0, 300))}` : `<b>other processes</b> ${when}\nall agents' processes without a plane of their own`;
-        return `${head}\ncpu ${Math.round(r.cpu)}% of a core = ${(r.cpu / cores).toFixed(1)}% of the machine (${cores} cores)\nmemory ${Math.round(r.rss)} MB = ${(r.rss / 1024 / memTot * 100).toFixed(1)}% of ${Math.round(memTot)} GB`;
-      }
+      if (it.kind === "agent") { const a = r.a;
+        return `<b>${esc(it.n)}</b> all processes ${when}\ncpu ${Math.round(a.cpu || 0)}% of a core · ${Math.round(a.rss_mb || 0)} MB · ${a.n ?? "?"} processes\n${(a.top || []).map(t => `${esc(String(t.cmd || "").slice(0, 80))}  ${Math.round(t.cpu)}% ${Math.round(t.rss_mb)} MB`).join("\n")}`; }
       return `<b>machine</b> ${when}\ncpu ${r.cpu ?? "?"}% (min ${r.cpuMin ?? "?"}, max ${r.cpuMax ?? "?"})\nmemory ${r.mem ?? "?"}%${r.memGb != null ? ` · ${r.memGb} of ${r.memTot} GB` : ""}\n`
         + (r.gpus?.length ? r.gpus.map(g => `gpu ${g.index}: ${g.util_percent ?? "?"}% util · ${g.mem_used_gb ?? "?"} of ${g.mem_total_gb ?? "?"} GB`).join("\n") : "no gpu data"); } };
     if (items.length) { world.add(mesh); pickables.push(mesh); }
-    if (strokes.length) { const ls = segments(strokes, scols, 0.6); ls.name = "procs";
-      ls.userData = { group: "panel", info: i => { const { n, p, a, b } = sinfo[i]; return `<b>${esc(n)}</b> pid ${p.pid} <span class="m">${clock(a, true)} – ${p.life && !p.life.end ? "running" : clock(b, true)} (${dur(b - a)})</span>\n${esc(String(p.cmd || "").slice(0, 300))}`; } };
-      world.add(ls); pickables.push(ls); }
     if (!byAgent.size) notes.push(X3.procsNote || "no process samples in this window");
   }
 
   endPlane("south");
-  // ----- west: each agent's total load: two square columns per sample, cpu and memory (paler), side = value -----
-  {
-    const xW = planeAt.west(), names = [...byAgent.keys()].sort((a, b) => P.get(a).z - P.get(b).z), ground = tcolor("var(--ground)");
-    let maxCpu = 100, maxRss = 256;
-    for (const g of byAgent.values()) for (const s of g.tot) { maxCpu = Math.max(maxCpu, s.a.cpu || 0); maxRss = Math.max(maxRss, s.a.rss_mb || 0); }
-    const U = Math.min(16, (B.z1 - B.z0) / Math.max(1, names.length)), items = [];
-    names.forEach((n, i) => { const z = B.z0 + i * U, c = tcolor(colorOf(n));
-      for (const sp of spans(byAgent.get(n).tot, Y, 60)) items.push({ n, sp, z, c });
-      fpush(xW, YP, z, xW, YP + TL, z);
-      tick(new THREE.Vector3(xW, YP - 2, z + U / 2), esc(n), colorOf(n)); });
-    planeSpan.west = [B.z0, B.z1];
-    fpush(xW, YP, B.z0, xW, YP, B.z1);
-    cap(new THREE.Vector3(xW, YP + TL + 5, (B.z0 + B.z1) / 2), "each agent's total processes");
-    if (names.length) labels.push({ v: new THREE.Vector3(xW, YP + TL + 1, B.z0), html: `<span class="tick">two columns per agent: cpu, then memory (paler) · full width: ${Math.round(maxCpu)}% of a core, ${Math.round(maxRss)} MB</span>`, anchor: "l", pri: 3e8 });
-    const mesh = instanced(items.length * 2, new THREE.MeshLambertMaterial());
-    items.forEach((it, j) => { const h = U / 2 * 0.9, xc = xW - h / 2 - 0.5, a = it.sp.s.a;
-      const ac = h * (0.15 + 0.85 * Math.min(1, (a.cpu || 0) / maxCpu)), am = h * (0.15 + 0.85 * Math.min(1, (a.rss_mb || 0) / maxRss));
-      setBox(mesh, 2 * j, xc, it.sp.y, it.z + U * 0.25, ac, it.sp.h, ac, it.c);
-      setBox(mesh, 2 * j + 1, xc, it.sp.y, it.z + U * 0.75, am, it.sp.h, am, it.c.clone().lerp(ground, 0.5)); });
-    mesh.userData = { group: "panel", info: j => { const it = items[j >> 1], a = it.sp.s.a, ts = it.sp.s.ts;
-      return `<b>${esc(it.n)}</b> all processes <span class="m">${dayOf(ts)} ${clock(ts, true)}</span>\ncpu ${Math.round(a.cpu || 0)}% of a core · ${Math.round(a.rss_mb || 0)} MB · ${a.n ?? "?"} processes\n${(a.top || []).map(t => `${esc(String(t.cmd || "").slice(0, 80))}  ${Math.round(t.cpu)}% ${Math.round(t.rss_mb)} MB`).join("\n")}`; } };
-    if (items.length) { world.add(mesh); pickables.push(mesh); }
-  }
-
-  endPlane("west");
   // ----- east: git commits, a lane per repo; depth out of the plane = lines changed; lines to files and the committer (toggle) -----
   {
     const xE = planeAt.east(), repos = [...X3.git.keys()].sort(), commits = [];
@@ -1183,28 +1128,28 @@ cv.addEventListener("dblclick", ev => {
 });
 const graphCenter = () => new THREE.Vector3(toX(LW / 2), YP + TL / 2, toZ(LH / 2));
 const PRESETS = {
-  // 5: from just under the present, looking up the agents' columns into the past
+  // 4: from just under the present, looking up the agents' columns into the past
   up: () => { const c = graphCenter(); return [new THREE.Vector3(c.x + 25, Math.max(4, YP * 0.35), toZ(LH) + 30), new THREE.Vector3(c.x, YP + TL * 0.7, c.z), UP]; },
-  // 6: from the side, rolled so time runs left (past) to right (now)
+  // 5: from the side, rolled so time runs left (past) to right (now)
   side: () => { const c = graphCenter(), d = Math.max(TL, CW * ARR.gs) * 1.25; return [new THREE.Vector3(c.x, c.y, c.z + d), c, new THREE.Vector3(1, 0, 0)]; },
-  // 4: straight down onto the city
+  // 3: straight down onto the city
   city: () => { const c = new THREE.Vector3(CXw(0), 0, CZw(0)); return [new THREE.Vector3(c.x, Math.max(CW, CD) * ARR.cs * 1.5, c.z + 1), c, UP]; },
-  // 1-3: square on to a side plane, from outside it, framing the plane's width and the time height
-  // (the machine plane is seen from a little above, through the faint process planes in front of it)
-  south: () => facing(new THREE.Vector3((planeSpan.south[0] + planeSpan.south[1]) / 2, YP + TL / 2, planeAt.south()), new THREE.Vector3(0, 0.22, 1).normalize(), planeSpan.south[1] - planeSpan.south[0]),
-  west: () => facing(new THREE.Vector3(planeAt.west(), YP + TL / 2, (planeSpan.west[0] + planeSpan.west[1]) / 2), new THREE.Vector3(-1, 0, 0), planeSpan.west[1] - planeSpan.west[0]),
+  // 1: the machine's and the agents' rows from outside their south-west corner and a little above, so both the rows and the
+  // lanes along them spread out; 2: square on to the git plane
+  south: () => { const [x0, x1] = planeSpan.south, [z0, z1] = planeSpan.southZ;
+    return facing(new THREE.Vector3((x0 + x1) / 2, YP + TL / 2 - (z1 - z0) * 0.15, (z0 + z1) / 2), new THREE.Vector3(-0.5, 0.3, 1).normalize(), ((x1 - x0) + (z1 - z0)) * 1.25, (z1 - z0) * 0.6); },
   east: () => facing(new THREE.Vector3(planeAt.east(), YP + TL / 2, (planeSpan.east[0] + planeSpan.east[1]) / 2), new THREE.Vector3(1, 0, 0), planeSpan.east[1] - planeSpan.east[0]),
 };
-function facing(c, normal, width) {
-  const t = Math.tan(camera.fov * Math.PI / 360), d = Math.max((TL + 20) / 2 / t, (width + 30) / 2 / t / camera.aspect) * 1.08;
+function facing(c, normal, width, extraH = 0) {
+  const t = Math.tan(camera.fov * Math.PI / 360), d = Math.max((TL + 20 + extraH) / 2 / t, (width + 30) / 2 / t / camera.aspect) * 1.08;
   return [c.clone().addScaledVector(normal, d), c, UP];
 }
-function preset(k) { if (fp) fpExit(); focusPlane = ["south", "west", "east"].includes(k) ? k : null; applyFocus(); const [pos, tgt, up] = PRESETS[k](); flyTo(pos, tgt, 750, up); }
+function preset(k) { if (fp) fpExit(); focusPlane = ["south", "east"].includes(k) ? k : null; applyFocus(); const [pos, tgt, up] = PRESETS[k](); flyTo(pos, tgt, 750, up); }
 for (const b of document.querySelectorAll("[data-preset]")) b.onclick = () => preset(b.dataset.preset);
 $("home").onclick = () => { setUp(UP); focusPlane = null; applyFocus(); home(); };
 document.addEventListener("keydown", ev => {
   if (ev.target.matches("input:not([type=checkbox]), select, textarea") || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-  const k = { Digit1: "south", Digit2: "west", Digit3: "east", Digit4: "city", Digit5: "up", Digit6: "side" }[ev.code];
+  const k = { Digit1: "south", Digit2: "east", Digit3: "city", Digit4: "up", Digit5: "side" }[ev.code];
   if (k) { preset(k); ev.preventDefault(); }
   else if (ev.code === "Digit0") { setUp(UP); focusPlane = null; applyFocus(); home(); }
   else if (ev.code === "KeyF" && !fp) fpEnter();
@@ -1328,7 +1273,7 @@ function nearDetail() {
 function clearNear() { for (const [p, n] of near) { world.remove(n.mesh); n.mesh.geometry.dispose(); n.mats.forEach(m => { m.map?.dispose(); m.dispose(); }); near.delete(p); } }
 
 // ---------- arrangement: sizes (sliders) and positions (shift-drag), remembered ----------
-const ARR_IDS = [["acity", "cs"], ["acityh", "ch"], ["agraph", "gs"], ["atime", "tl"], ["aoc", "oc"], ["aos", "os"], ["aow", "ow"], ["aoe", "oe"]];
+const ARR_IDS = [["acity", "cs"], ["acityh", "ch"], ["agraph", "gs"], ["atime", "tl"], ["aoc", "oc"], ["aos", "os"], ["aoe", "oe"]];
 for (const [id, key] of ARR_IDS) {
   $(id).value = ARR[key];
   let t = 0; $(id).addEventListener("input", () => { ARR[key] = Number($(id).value); saveArr(); clearTimeout(t); t = setTimeout(() => relabel(), 120); });

@@ -450,7 +450,7 @@ async function analyticsHistoryRaces() {
       projSel: () => '', nowS: () => now, under: () => true,
       api: url => new Promise((resolve, reject) => requests.push({ url, resolve, reject })) });
     vm.runInContext(extract('async function loadGit(', '// the bus machine')
-      + extract('async function loadHoratio(', '// ---------- the three side planes'), ctx);
+      + extract('async function loadHoratio(', '// ---------- the two side planes'), ctx);
     const load = since => Promise.all([ctx.loadGit(since, 18000), ctx.loadHoratio(since, 18000)]);
     const reply = (at, stamps) => {
       requests[at].resolve({ repo: '/repo', commits: stamps });
@@ -1665,7 +1665,7 @@ async function analytics3dNotes() {
       if (url.startsWith('/events')) return { events: [], next: 0 };
       horatio++; throw Object.assign(new Error('horatio is not configured on this bus'), { status: 404 });
     } });
-  vm.runInContext(extract('async function offsetAt(', 'async function loadGit(') + extract('async function loadHoratio(', '// ---------- the three side planes'), ctx);
+  vm.runInContext(extract('async function offsetAt(', 'async function loadGit(') + extract('async function loadHoratio(', '// ---------- the two side planes'), ctx);
   await ctx.loadProcs(0);
   assert.equal(ctx.X3.procsNote, 'no process samples in this window');
   await ctx.loadHoratio(0, 3600);
