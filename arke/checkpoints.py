@@ -9,12 +9,13 @@ first / last event per session id.
 
 Each UTC day's own compaction is saved once, in STATE_DIR/checkpoints/<day>.json, covering the log bytes
 [cut(day), cut(next day)) where a cut is the first complete line stamped at or after that midnight. A file is
-trusted only while it still describes the log: same file (generation), long enough, starting where the
+trusted only while it was built by this code and still describes the log: same file (generation), long enough, starting where the
 previous day ended, and the bytes before its end unchanged. Anything else is rebuilt from the log.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sys
@@ -42,6 +43,8 @@ KEEP_ALL: frozenset[str] = frozenset(
         "message",
     }
 )
+# Day files record which code built them: a change to what is kept (or anything else in this file) rebuilds them.
+RULES: str = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 # Building writes files; one at a time (two tabs opening at once would otherwise build the same days twice).
 LOCK: threading.Lock = threading.Lock()
 
@@ -129,6 +132,7 @@ def build_day(
     cut; None if no line has been logged after that midnight yet (the day is still open). Events get "o", their
     byte offset."""
     rec: dict[str, Any] = {
+        "rules": RULES,
         "gen": gen,
         "start": start,
         "all": [],
@@ -185,6 +189,7 @@ def before(
             rec: dict[str, Any] | None = load_cache(path)
             if not (
                 rec
+                and rec.get("rules") == RULES
                 and rec.get("gen") == gen
                 and rec.get("start") == start
                 and isinstance(rec.get("end"), int)

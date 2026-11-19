@@ -220,7 +220,7 @@ systemctl --user disable --now arke # stop it and disable automatic startup
 
 ## State and moving an existing installation
 
-All state lives in `.local/` inside the clone (gitignored): the server's `.local/server/state.sqlite3`, its event log `.local/server/log.jsonl` and backups, and each machine's configuration `.local/config.toml`, client state `.local/client/` and saved server address `.local/server-url`. These files contain private conversations and machine information; keep them out of the public repository. `.local/server/checkpoints/` holds one file per UTC day of the event log, compacted for the analytics pages (see [Analytics data](#analytics-data)); it is derived, rebuilt whenever it no longer matches the log, safe to delete, and not part of backups.
+All state lives in `.local/` inside the clone (gitignored): the server's `.local/server/state.sqlite3`, its event log `.local/server/log.jsonl` and backups, and each machine's configuration `.local/config.toml`, client state `.local/client/` and saved server address `.local/server-url`. These files contain private conversations and machine information; keep them out of the public repository. `.local/server/checkpoints/` holds one file per UTC day of the event log, compacted for the analytics pages (see [Analytics data](#analytics-data)); it is derived, rebuilt whenever it no longer matches the log or was written by different code, safe to delete, and not part of backups.
 
 To move an existing Arke installation:
 

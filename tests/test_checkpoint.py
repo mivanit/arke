@@ -233,6 +233,26 @@ def test_day_files_are_written_once_and_reused(folder: Path) -> None:
     assert grown["events"][-1]["ts"] == D0 + 2 * DAY + 900
 
 
+def test_day_files_from_other_code_are_rebuilt(folder: Path) -> None:
+    """A change to what checkpoints keep must not draw from files the old rules wrote."""
+    write(three_days())
+    t: float = D0 + 2 * DAY + 1
+    server.read_events(0, set(), 50000, from_ts=t)
+    built: list[float] = []
+    real = checkpoints.build_day
+
+    def counting(*args: Any) -> dict[str, Any] | None:
+        built.append(args[-1])
+        return real(*args)
+
+    with patch.object(checkpoints, "build_day", side_effect=counting):
+        server.read_events(0, set(), 50000, from_ts=t)
+        assert built == []  # same code: reused
+        with patch.object(checkpoints, "RULES", "other"):
+            server.read_events(0, set(), 50000, from_ts=t)
+    assert built == [D0, D0 + DAY]
+
+
 @pytest.mark.parametrize("change", ["truncate", "rewrite in place", "replace the file"])
 def test_day_files_are_rebuilt_when_the_log_changed_under_them(
     folder: Path, change: str
