@@ -220,7 +220,7 @@ systemctl --user disable --now arke # stop it and disable automatic startup
 
 ## State and moving an existing installation
 
-All state lives in `.local/` inside the clone (gitignored): the server's `.local/server/state.sqlite3`, its event log `.local/server/log.jsonl` and backups, and each machine's configuration `.local/config.toml`, client state `.local/client/` and saved server address `.local/server-url`. These files contain private conversations and machine information; keep them out of the public repository.
+All state lives in `.local/` inside the clone (gitignored): the server's `.local/server/state.sqlite3`, its event log `.local/server/log.jsonl` and backups, and each machine's configuration `.local/config.toml`, client state `.local/client/` and saved server address `.local/server-url`. These files contain private conversations and machine information; keep them out of the public repository. `.local/server/checkpoints/` holds one file per UTC day of the event log, compacted for the analytics pages (see [Analytics data](#analytics-data)); it is derived, rebuilt whenever it no longer matches the log, safe to delete, and not part of backups.
 
 To move an existing Arke installation:
 
@@ -459,7 +459,7 @@ The event log (`.local/server/log.jsonl`) records everything an analytics page n
 - `procs`: each local agent's process tree every `process_interval` seconds (CPU, memory, busiest, started and ended processes)
 - server: `start`, `stop`, `turn_error` (reading a transcript failed) and `watch_error` (a background pass failed), with tracebacks
 
-`GET /events?since=BYTES&type=tool,usage&limit=N` returns them, with `next` as the offset to continue from and a `generation` token; pass `&generation=TOKEN` with later offsets, and on HTTP 400 (the log file was replaced) start again from `since=0`. `GET /analytics` serves `web/analytics.html`, and `GET /analytics3d` the 3D view (`web/analytics3d.html`).
+`GET /events?since=BYTES&type=tool,usage&limit=N` returns them, with `next` as the offset to continue from and a `generation` token; pass `&generation=TOKEN` with later offsets, and on HTTP 400 (the log file was replaced) start again from `since=0`. `&procs=totals` cuts `procs` events to each agent's `cpu` and `rss_mb`. `&from=T` (a Unix time, with `since` 0) starts instead with a checkpoint: the events from before the last UTC midnight before `T` that the pages still need (every identity, `state`, `update` and `message` event, and the first and last per-session samples of the others), in log order, followed by everything from that midnight on; the answer's `from` gives that midnight (`day`), the byte offset reading continued at (`cut`) and hourly tool counts per session before it (`hours`). The log itself is never shortened. `GET /analytics` serves `web/analytics.html`, and `GET /analytics3d` the 3D view (`web/analytics3d.html`).
 
 ## Development
 

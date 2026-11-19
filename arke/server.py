@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, Never, TextIO
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
+import checkpoints
 import client  # shared settings (same folder)
 import roster
 import settings
@@ -2998,16 +2999,37 @@ def git_log(cwd: Path, since: float, limit: int) -> dict[str, Any]:
     return {"repo": str(root), "commits": out}
 
 
+def totals(e: dict[str, Any]) -> dict[str, Any]:
+    """A procs event cut to each agent's cpu and rss_mb (other events unchanged): its top/started/ended lists
+    are most of the log's bytes, and the 2D page draws only the totals."""
+    if e["event"] != "procs":
+        return e
+    agents: Any = e.get("agents")
+    return {
+        "ts": e.get("ts"),
+        "event": "procs",
+        "agents": {
+            name: {"cpu": v.get("cpu"), "rss_mb": v.get("rss_mb")}
+            for name, v in agents.items()
+            if isinstance(v, dict)
+        }
+        if isinstance(agents, dict)
+        else {},
+    }
+
+
 def read_events(
     since: int,
     types: set[str],
     limit: int,
     generation: str = "",
     procs_totals: bool = False,
+    from_ts: float | None = None,
 ) -> dict[str, Any]:
     """Raw event log from byte offset `since` (optionally only some event types). `next` is where to continue.
-    procs_totals: procs events keep only each agent's cpu and rss_mb (their top/started/ended lists are most of
-    the log's bytes, and the 2D page draws only the totals)."""
+    procs_totals: procs events are cut to their totals (see `totals`).
+    from_ts (with since 0): start with the checkpoint for that time (checkpoints.py) and continue at its cut,
+    instead of reading from byte 0; `from` says which UTC midnight the checkpoint stands for."""
     if not LOG_FILE.exists():
         return {"events": [], "next": 0, "generation": "missing"}
     events: list[dict[str, Any]] = []
@@ -3024,39 +3046,37 @@ def read_events(
                 400,
                 f"since={since} is past the end of the log ({stat.st_size} bytes); was it rotated? start from 0",
             )
+        # the checkpoint and the read after it come from this one open file, so they describe the same log
+        cp: dict[str, Any] | None = (
+            checkpoints.before(
+                f, stat.st_size, current, from_ts, STATE_DIR / "checkpoints"
+            )
+            if from_ts is not None and since == 0
+            else None
+        )
+        if cp is not None:
+            events = [
+                totals(e) if procs_totals else e
+                for e in cp["events"]
+                if not types or e["event"] in types
+            ]
+            since = pos = cp["cut"]
+            # the checkpoint can't be paged, so it doesn't count against the limit
+            limit += len(events)
         # `since` should be a line start (a previous `next`); if not, this resumes at the next whole line
         for start, line in whole_lines(f, since, stat.st_size):
             pos = start + len(line)
-            try:
-                e: Any = json.loads(line)
-                if not isinstance(e, dict):
-                    raise TypeError("event must be an object")
-                if not isinstance(e.get("event"), str):
-                    raise TypeError("event name must be a string")
-            except (ValueError, TypeError) as err:
-                print(
-                    f"arke: skipping damaged event at byte {start}: {err}",
-                    file=sys.stderr,
-                )
+            e: dict[str, Any] | None = checkpoints.parse_event(line, start)
+            if e is None:
                 continue
-            if not types or e.get("event") in types:
-                if procs_totals and e["event"] == "procs":
-                    agents: Any = e.get("agents")
-                    e = {
-                        "ts": e.get("ts"),
-                        "event": "procs",
-                        "agents": {
-                            name: {"cpu": v.get("cpu"), "rss_mb": v.get("rss_mb")}
-                            for name, v in agents.items()
-                            if isinstance(v, dict)
-                        }
-                        if isinstance(agents, dict)
-                        else {},
-                    }
-                events.append(e)
+            if not types or e["event"] in types:
+                events.append(totals(e) if procs_totals else e)
                 if len(events) >= limit:
                     break
-    return {"events": events, "next": pos, "generation": current}
+    out: dict[str, Any] = {"events": events, "next": pos, "generation": current}
+    if cp is not None:
+        out["from"] = {"day": cp["day"], "cut": cp["cut"], "hours": cp["hours"]}
+    return out
 
 
 # wake-up timing, read by Bus.wake_pass and watch_agents (the waking itself is in wake.py)
@@ -3371,12 +3391,16 @@ class Handler(BaseHTTPRequestHandler):
                 case "GET", ["events"]:
                     if q.get("procs", "") not in ("", "totals"):
                         raise HttpError(400, "procs must be totals or absent")
+                    from_ts: float | None = float(q["from"]) if "from" in q else None
+                    if from_ts is not None and not math.isfinite(from_ts):
+                        raise HttpError(400, "from must be a finite time")
                     out = read_events(
                         max(0, int(q.get("since", 0))),
                         set(filter(None, q.get("type", "").split(","))),
                         max(1, min(int(q.get("limit", 5000)), 50000)),
                         q.get("generation", ""),
                         q.get("procs") == "totals",
+                        from_ts,
                     )
                 case "POST", ["hook"]:
                     out = bus.hook(body)
