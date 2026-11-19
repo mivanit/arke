@@ -187,7 +187,7 @@ svg.tsc .tsbr { fill: var(--accent); opacity: .15; }
   <span class="netstat wait" id="netstat" role="status">connecting</span>
   <span class="grow"></span>
   <span class="seg" id="ranges" role="group" aria-label="Time range">
-    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="0">all</button>
+    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="604800">1w</button><button class="btn" type="button" data-r="0">all</button>
   </span>
   <select id="proj" aria-label="Project"><option value="">all projects</option></select>
   <label class="status"><input type="checkbox" id="live" checked> live</label>
@@ -326,7 +326,7 @@ async function load() {
   if (loading) return; loading = true;
   try {
     $("conn").textContent = await readEvents(TYPES);
-    $("status").textContent = `${raw.length.toLocaleString()} events · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
+    $("status").textContent = `${raw.length.toLocaleString()} events ${loadedSpan()} · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
     render();
   } catch (e) {
     $("conn").textContent = String(e.message || e);
@@ -334,6 +334,7 @@ async function load() {
     console.error(e);
     build(); render();  // an interrupted reset must also replace the old model when the new log is empty
   } finally { loading = false; }
+  if (staleWindow()) { resetEvents(); load(); }  // the window moved before the loaded data while this load ran
 }
 
 // ---------- view state ----------
@@ -372,6 +373,7 @@ let renderPending = false;
 const dragging = () => drag || G.drag || TS.br;
 function render() {
   if (!M) return;
+  if (staleWindow() && !loading) { resetEvents(); load(); return; }  // load() renders when done; a running load rechecks at its end
   if (dragging()) { renderPending = true; return; }
   renderPending = false;
   tips = [];
@@ -395,8 +397,14 @@ function render() {
 
 function renderOverview(w0, w1) {
   const svg = $("ov"), width = svg.clientWidth || W, n = Math.max(20, Math.floor(width / 4)), a = M.t0, b = M.t1, bins = new Array(n).fill(0);
-  for (const L of M.lanes.values()) if (inProj(L)) for (const e of L.tools) bins[Math.min(n - 1, Math.floor((e.ts - a) / (b - a) * n))]++;
-  for (const m of M.msgs) bins[Math.min(n - 1, Math.floor((m.ts - a) / (b - a) * n))]++;
+  const bin = (t, k = 1) => { bins[Math.max(0, Math.min(n - 1, Math.floor((t - a) / (b - a) * n)))] += k; };
+  // tool calls: loaded events from loadedFrom on, the checkpoint's hourly counts before it (its tool events are only a sample)
+  for (const L of M.lanes.values()) if (inProj(L)) for (const e of L.tools) if (e.ts >= loadedFrom) bin(e.ts);
+  for (const [cell, k] of Object.entries(cpHours)) {
+    const [hour, who] = cell.split("|"), name = who.startsWith("s:") ? M.ofSid(who.slice(2)) : who.slice(2), L = name && M.lanes.get(name);
+    if (L && inProj(L)) bin(Number(hour) * 3600 + 1800, k);
+  }
+  for (const m of M.msgs) bin(m.ts);  // every message is kept, so these are exact
   const mx = Math.max(1, ...bins), bw = width / n;
   let h = bins.map((v, i) => v ? `<rect x="${i * bw}" y="${30 - v / mx * 28}" width="${Math.max(1, bw - 0.5)}" height="${v / mx * 28}" fill="var(--muted)" opacity=".55"/>` : "").join("");
   const x0 = X(w0, a, b, width), x1 = X(w1, a, b, width);

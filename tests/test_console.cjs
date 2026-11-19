@@ -12,6 +12,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const read = name => fs.readFileSync(path.join(path.dirname(__dirname), 'web', name), 'utf8');  // the pages live in ../web
 // the event-log reader both analytics pages' load() calls
 const readEventsSrc = (s => s.slice(s.indexOf('async function readEvents('), s.indexOf('// ---------- view state')))(read('analytics-page.js'));
+// what readEvents and load() use from the rest of analytics-page.js: a whole-log load (no checkpoint, nothing to reload)
+const wholeLog = () => ({ LIMIT: 20000, loadedFrom: -Infinity, cpHours: {}, wantedFrom: () => null, staleWindow: () => false, resetEvents() {}, loadedSpan: () => 'in the log' });
 const readAsset = name => fs.readFileSync(path.join(path.dirname(__dirname), '.local/web', name), 'utf8');
 function playwright() {
   try { return require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright'); }
@@ -234,7 +236,7 @@ async function analyticsFiles() {
   let ctx;
   for (const page of ['analytics.html', 'analytics3d.html']) {
     const html = read(page);
-    ctx = vm.createContext({ raw, M: null, nowS: () => 10, agentsNow: [{ host: 'local', local: true }], console });
+    ctx = vm.createContext({ raw, M: null, loadedFrom: -Infinity, nowS: () => 10, agentsNow: [{ host: 'local', local: true }], console });
     vm.runInContext(read('analytics-shared.js')
       + extract(read('analytics-page.js'), 'const fileAt =', 'let paneResized')
       + extract(read('analytics-page.js'), 'function build()', '\n') + '; build();', ctx);
@@ -607,6 +609,191 @@ async function consoleUI() {
 }
 
 // Findings 14-16: run the real build()/load() in a vm against a scripted /events, for both pages.
+// A page that starts from a checkpoint (the server's compacted log before a UTC midnight, then everything after it) must
+// draw its window exactly as a page that read the whole log. The log is generated with the cases the compaction rules
+// exist for, and both answers come from the real server code.
+function analyticsCheckpointEquivalence() {
+  const script = String.raw`
+import json, os, random, sys, tempfile
+from pathlib import Path
+import checkpoints, server
+D0 = 1_795_000_000 // 86400 * 86400
+rnd = random.Random(7)
+rows = []
+def ev(ts, event, **f): rows.append({"ts": ts, "event": event, **f})
+def day(d, h=0.0): return D0 + d * 86400 + h * 3600
+agents = {"a": "s1", "b": "s3", "d": "s5", "e": "s7"}
+for n, sid in agents.items(): ev(day(0, 0.1), "join", agent=n, sid=sid, kind="claude", projects=["/p"])
+ev(day(0, 0.2), "join", agent="old", kind="codex")  # a legacy agent: no session ids anywhere
+# q works on the first two days only, on a project nobody else touches, and is left a question it never answers
+ev(day(0, 0.3), "join", agent="q", sid="s9", kind="claude", projects=["/p"])
+for d in range(2):
+    ev(day(d, 5), "state", agent="q", state="busy")
+    ev(day(d, 5.1), "tool", agent="q", sid="s9", tool="Edit", target="/p/a.py", projects=["/p"])
+    if d == 0:  # the only call on /only-q is neither q's first nor its last
+        ev(day(0, 5.15), "tool", agent="q", sid="s9", tool="Edit", target="/only-q/a.py", projects=["/only-q"])
+    ev(day(d, 5.2), "usage", agent="q", sid="s9", source="hook", tokens=500 * (d + 1), context=260000 - d * 250000, window=0, model="m")
+    ev(day(d, 5.3), "state", agent="q", state="idle")
+ev(day(1, 6), "message", **{"from": "e"}, to=[{"name": "q", "kind": "agent"}], reach=["q"], text="still there?")
+# u's samples: once past 200k (the 1M window guess), the last with a context, then a newest one without, then one in the window
+ev(day(0, 0.4), "join", agent="u", sid="s11", kind="claude")
+for h, tokens, context in ((1, 100, 300000), (95.0, 200, 40000), (95.99, 300, None), (96.2, 400, 50000)):
+    ev(day(0, h), "usage", agent="u", sid="s11", source="hook", tokens=tokens, context=context, window=0, model="m")
+# s8 is first seen in a prompt (a dropped type); its name is then claimed and renamed by s10, and s8 shows up again later
+# np's tool calls carry no project, and its first one is the log's first tool call
+ev(day(0, 0.005), "join", agent="np", sid="s12", kind="codex")
+ev(day(0, 0.01), "tool", agent="np", sid="s12", tool="Bash", target="ls", projects=[])
+ev(day(0, 0.02), "tool", agent="np", sid="s12", tool="Bash", target="pwd", projects=[])
+ev(day(0, 20), "prompt", agent="pp", sid="s8")
+ev(day(0, 20.1), "join", agent="pp", sid="s10", kind="claude")
+ev(day(0, 20.2), "rename", agent="pp2", old="pp", sid="s10", by="human")
+ev(day(4, 1), "tool", agent="pp", sid="s8", tool="Read", target="/p/z.py")
+for d in range(5):
+    for n, sid in list(agents.items()):
+        t = day(d, rnd.random() * 2)
+        for _ in range(rnd.randint(4, 9)):
+            t += rnd.random() * 9000
+            ev(t, "state", agent=n, state="busy"); ev(t + 1, "prompt", agent=n, sid=sid, wake=rnd.random() < 0.3)
+            for _ in range(rnd.randint(1, 5)):
+                t += rnd.random() * 300
+                ev(t, "tool", agent=n, sid=sid, tool=rnd.choice(["Read", "Edit", "Bash"]), target=f"/p/f{rnd.randint(1, 9)}.py", projects=[rnd.choice(["/p", "/q", "/p/x"])])
+            ev(t + 2, "usage", agent=n, sid=sid, source=rnd.choice(["hook", "transcript"]), tokens=int(t) % 100000, context=rnd.choice([None, 50000, 250000]), window=0, model="m")
+            if rnd.random() < 0.5:
+                to = rnd.choice([m for m in agents if m != n] + ["human"])
+                ev(t + 3, "message", **{"from": n}, to=[{"name": to, "kind": "human" if to == "human" else "agent"}], reach=[to], text="x")
+            if rnd.random() < 0.3: ev(t + 4, "wake", agent=n, sender="human", ok=True)
+            ev(t + 60, "state", agent=n, state="idle")
+        ev(day(d, 1), "procs", agents={n: {"cpu": rnd.random() * 90, "rss_mb": 300} for n in agents})
+    if d < 3:  # legacy events (no sid), and old goes quiet after day 2
+        ev(day(d, 3), "tool", agent="old", tool="Read", target=f"/old/{d}.py", projects=["/legacy"])
+        ev(day(d, 3.1), "usage", agent="old", tokens=d * 1000, context=1000)
+    if d == 0:  # renamed while busy, just before midnight; the name is reused at once by a new session
+        ev(day(0, 23.99), "rename", agent="c", old="a", sid="s1", by="human"); agents["c"] = agents.pop("a")
+        ev(day(0, 23.995), "join", agent="a", sid="s2", kind="codex", projects=["/q"]); agents["a"] = "s2"
+        ev(day(0, 23.996), "state", agent="a", state="idle")
+    if d == 1:  # a replacement session takes over b
+        ev(day(1, 12), "takeover", agent="b", old_sid="s3", new_sid="s4", why="pane"); ev(day(1, 12), "join", agent="b", sid="s4", kind="claude"); agents["b"] = "s4"
+    if d == 2:  # d ends, and the name comes back as a different agent the next day
+        ev(day(2, 20), "forget", agent="d"); agents.pop("d")
+    if d == 3: ev(day(3, 2), "join", agent="d", sid="s6", kind="codex", projects=["/r"]); agents["d"] = "s6"
+# stamped just before a midnight, written just after it (Bus.record stamps before change() writes)
+ev(day(3) + 1, "state", agent="e", state="busy"); ev(day(3) - 1, "state", agent="e", state="idle")
+rows.sort(key=lambda r: r["ts"])
+tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")))
+server.LOG_FILE, server.STATE_DIR = tmp / "log.jsonl", tmp / "state"
+late = next(r for r in rows if r["ts"] == day(3) - 1); rows.remove(late); rows.insert(next(i for i, r in enumerate(rows) if r["ts"] > day(3)) + 1, late)
+server.LOG_FILE.write_text("".join(json.dumps({"ts": r.pop("ts"), "event": r.pop("event"), **r}) + "\n" for r in rows))
+types = set(sys.argv[1].split(","))
+out = {"D0": D0, "whole": server.read_events(0, types, 10**9, procs_totals=True)["events"], "from": {}}
+for t in json.loads(sys.argv[2]): out["from"][str(t)] = server.read_events(0, types, 10**9, procs_totals=True, from_ts=t)
+print(json.dumps(out))
+`;
+  const TYPES = 'state,update,tool,message,prompt,wake,join,rename,takeover,forget,usage,procs';
+  const D0 = Math.floor(1795000000 / 86400) * 86400, day = (d, h = 0) => D0 + d * 86400 + h * 3600;
+  // windows starting just after a midnight (so what they start with comes from the checkpoint), one across a midnight, and
+  // one three days back (each [w0, w1]; the page asks from w0 - 120)
+  const windows = [[day(4, 0.05), day(4, 6)], [day(2, 0.05), day(3, 1)], [day(1, 0.05), day(4, 2)], [day(3, -1), day(3, 1)]];
+  const ran = spawnSync('python3', ['-c', script, TYPES, JSON.stringify(windows.map(([w0]) => w0 - 120))],
+    { cwd: path.join(path.dirname(__dirname), 'arke'), encoding: 'utf8', maxBuffer: 1 << 28 });
+  assert.equal(ran.status, 0, ran.stderr);
+  const out = JSON.parse(ran.stdout), { buildModel } = vm.runInNewContext(read('analytics-shared.js') + '; ({ buildModel });');
+  const stateAt = (L, t) => { const r = L.trans.filter(([ts]) => ts <= t).at(-1); return r ? r.join('@') : null; };
+  const inWin = (w0, w1) => x => x.ts >= w0 && x.ts <= w1;
+  const view = (M, w0, w1, from) => {
+    const w = inWin(w0, w1), lanes = {};
+    for (const L of M.lanes.values()) {
+      const tools = L.tools.filter(w), msgs = [...L.sent, ...L.recv].filter(w);
+      if (!tools.length && !msgs.length && !L.trans.some(([ts]) => ts <= w1)) continue;
+      lanes[L.name] = { state: stateAt(L, w0), trans: L.trans.filter(([ts]) => ts >= w0 && ts <= w1), tools: tools.map(t => [t.ts, t.tool, t.target]),
+        prompts: L.prompts.filter(w), wakes: L.wakes.filter(w).map(x => [x.ts, x.sender]), msgs: msgs.map(m => [m.ts, m.from]),
+        projects: [...L.projects].sort(), lastTool: L.tools.at(-1)?.ts, owes: L.recv.findLast(m => m.to.some(x => x.name === L.name))?.ts };
+    }
+    const usage = M.usage.filter(w).map(u => [u.ts, u.agent, u.dtok, u.win]), procs = M.procs.filter(w).map(p => [p.ts, JSON.stringify(p.agents)]);
+    // where each session's context gauge starts: its last sample with a window at or before w0
+    const ctxStart = {};
+    for (const u of M.usage) if (u.win && u.ts <= w0) ctxStart[u.sid + '|' + u.src] = [u.ts, u.win, u.context];
+    return { lanes, usage, procs, ctxStart, firstTool: M.firstTool, t0: M.t0 };
+  };
+  const hourly = (M, from, hours) => {  // tool calls per (hour, lane), as the overview strip counts them
+    const n = {}, add = (h, name, k) => { n[h + '|' + name] = (n[h + '|' + name] || 0) + k; };
+    for (const L of M.lanes.values()) for (const t of L.tools) if (t.ts >= from) add(Math.floor(t.ts / 3600), L.name, 1);
+    for (const [cell, k] of Object.entries(hours)) { const [h, who] = cell.split('|'); add(Number(h), who.startsWith('s:') ? M.ofSid(who.slice(2)) : who.slice(2), k); }
+    return n;
+  };
+  const whole = buildModel(out.whole, [], day(4, 12));
+  for (const [w0, w1] of windows) {
+    const r = out.from[String(w0 - 120)];
+    assert(r.from && r.from.day <= w0 - 120, `window ${w0}: a checkpoint was used`);
+    assert(r.events.length < out.whole.length, `window ${w0}: the checkpoint answer is smaller (${r.events.length} of ${out.whole.length})`);
+    const cp = buildModel(r.events, [], day(4, 12));
+    assert.deepEqual(view(cp, w0, w1, r.from.day), view(whole, w0, w1, r.from.day), `window ${w0}: the same picture`);
+    assert.deepEqual(hourly(cp, r.from.day, r.from.hours), hourly(whole, -Infinity, {}), `window ${w0}: the same overview counts`);
+  }
+  console.log('ok: a window drawn from a checkpoint matches the whole log (renames, reuse, takeover, legacy, late stamps, three windows)');
+}
+
+// The pages ask for a checkpoint covering their window, reload from an earlier one when the window grows past it (even while a
+// load is running), read the whole log for "all", and never loop against a server that ignores `from`.
+async function analyticsReloadEarlier() {
+  const { chromium } = playwright();
+  const browser = await chromium.launch({ executablePath: chrome(chromium), headless: true });
+  try {
+    for (const supportsFrom of [true, false]) {
+      const now = Date.now() / 1000, midnight = t => Math.floor(t / 86400) * 86400, END = 1000;
+      const log = Array.from({ length: 30 }, (_, i) => ({ event: 'tool', agent: 'a', sid: 's', ts: now - (29 - i) * 6 * 3600, tool: 'Read', target: '/r/' + i }));
+      const asked = [], until = async (ok, what) => { for (let i = 0; i < 1500 && !ok(); i++) await new Promise(r => setTimeout(r, 20)); assert(ok(), what); };
+      let hold = null;
+      const events = async u => {
+        const since = Number(u.searchParams.get('since')), from = u.searchParams.get('from');
+        if (since || u.searchParams.get('type') === 'procs') return { events: [], next: END, generation: 'g' };  // 3D's process samples: not counted
+        asked.push(from == null ? null : Number(from));
+        if (hold) await hold.promise;
+        if (!supportsFrom || from == null) return { events: log, next: END, generation: 'g' };
+        const day = midnight(Number(from));  // the checkpoint keeps one event from before its day, then everything after
+        return { events: [log[0], ...log.filter(e => e.ts >= day)], next: END, generation: 'g', from: { day, cut: 1, hours: {} } };
+      };
+      for (const page of ['analytics', 'analytics3d']) {
+        asked.length = 0;
+        const { p } = await mockPage(browser, u => u.pathname === '/events' ? events(u) : u.pathname === '/horatio/history' ? { records: [] } : []);
+        const errors = []; p.on('pageerror', e => errors.push(e.message));
+        await p.addInitScript(() => localStorage.setItem('ab.an.range', '86400'));  // a visitor who last chose 24h
+        await p.goto(`http://arke-review.test/${page}`);
+        await until(() => asked.length === 1, `${page}: the first load asks once`);
+        await p.waitForFunction(() => M && loadedFrom !== undefined && raw.length > 0);
+        const what = `${page}, ${supportsFrom ? '' : 'no '}checkpoint support`;
+        assert(Math.abs(asked[0] - (now - 86400 - 120)) < 30, `${what}: the first request asks from the window's start`);
+        if (!supportsFrom) {
+          await p.click('[data-r="604800"]'); await p.click('[data-r="0"]'); await p.waitForTimeout(300);
+          assert.equal(asked.length, 1, `${what}: the whole log was read once; nothing reloads`);
+          assert.equal(await p.evaluate(() => loadedFrom), -Infinity);
+          await p.close(); continue;
+        }
+        assert.equal(await p.evaluate(() => loadedFrom), midnight(asked[0]));
+        // a longer range reloads from an earlier checkpoint; "all", clicked while that load is held, reloads once it ends
+        hold = deferred();
+        await p.click('[data-r="604800"]');
+        await until(() => asked.length === 2, `${page}: 1w reloads`);  // held at the server: this load is still running
+        assert.equal(asked.length, 2, `${what}: 1w asks again`);
+        assert(Math.abs(asked[1] - (now - 604800 - 120)) < 30, `${what}: from the new window's start`);
+        if (page === 'analytics') {
+          await p.click('[data-r="0"]');
+          hold.resolve(); hold = null;
+          await until(() => asked.length === 3, '"all" reloads after the held load');
+          await p.waitForFunction(n => loadedFrom === -Infinity && raw.length === n, log.length);
+          assert.equal(asked.at(-1), null, `${what}: "all" reads the whole log, after the running load`);
+          assert.equal(await p.evaluate(() => raw.length), log.length, `${what}: no event loaded twice`);
+        } else {
+          hold.resolve(); hold = null;
+          await p.waitForFunction(day => loadedFrom === day, midnight(asked[1]));
+        }
+        assert.deepEqual(errors, [], what);
+        await p.close();
+      }
+    }
+  } finally { await browser.close(); }
+  console.log('ok: both pages load from a checkpoint, reload when the window grows past it (queued during a load), and never loop without one');
+}
+
 function analyticsCrossBeforeLoad() {
   // Moving the pointer off a chart before the first load finished redrew the crosshair with no model: "M is null".
   const html = read('analytics.html'), page = read('analytics-page.js'), at = page.indexOf('const winNow =');
@@ -628,7 +815,7 @@ async function analyticsLoad() {
     assert.equal(model.msgs[1].from, 'human');
     const ls = html.indexOf('async function load()'), le = html.indexOf('// ---------- view state', ls);
     let clock = 100, size = 100, requests = [];
-    const els = new Map(), ctx = {
+    const els = new Map(), ctx = { ...wholeLog(),
       eventGeneration: "", raw: [], next: 0, loading: false, M: null, TYPES: 'tool', clock: String, console: { warn() {}, error: e => { throw e; } },
       nowS: () => clock, $: id => { if (!els.has(id)) els.set(id, {}); return els.get(id); },
       buildDefaults() {}, fillProjects() {}, render() {}, rebuild: async () => {}, showErr: m => { throw new Error(m); }, errSeen: new Map(),
@@ -645,7 +832,7 @@ async function analyticsLoad() {
     };
     let missing = false;
     if (file === 'analytics3d.html') ctx.X3 = { procs: [], procsNext: 0, procsFrom: Infinity, procsGen: 0, procsNote: '' };
-    vm.runInNewContext(html.slice(ls, le) + readEventsSrc + (file === 'analytics3d.html' ? html.slice(html.indexOf('async function offsetAt('), html.indexOf('async function loadGit(')) : ''), ctx);
+    vm.runInNewContext(html.slice(ls, le) + readEventsSrc + (file === 'analytics3d.html' ? html.slice(html.indexOf('async function loadProcs('), html.indexOf('async function loadGit(')) : ''), ctx);
     await ctx.load();
     clock = 3700; await ctx.load();
     assert.equal(ctx.M.t1, 3700, file + ': an idle reload still advances now');
@@ -671,7 +858,7 @@ async function analyticsLoad() {
 async function analyticsRecovery() {
   const extract = (html, a, b) => html.slice(html.indexOf(a), html.indexOf(b, html.indexOf(a)));
   function context() {
-    const elements = new Map(), ctx = {
+    const elements = new Map(), ctx = { ...wholeLog(),
       eventGeneration: "", raw: [], next: 0, loading: false, M: null, TYPES: 'tool', nowS: () => 200, clock: String,
       X3: { procs: [], procsNext: 0, procsFrom: Infinity, procsGen: 0, procsNote: '' },
       console: { warn() {}, error() {} }, $: id => { if (!elements.has(id)) elements.set(id, {}); return elements.get(id); },
@@ -716,7 +903,7 @@ async function analyticsRecovery() {
     if (since > 50) throw Object.assign(new Error('rotated'), { status: 400 });
     return { events: since ? [] : [{ event: proc ? 'procs' : 'tool', gen: 'new', ts: 195 }], next: 50 };
   };
-  vm.runInContext(extract(html, 'async function load()', '// ---------- view state') + readEventsSrc + extract(html, 'async function offsetAt(', 'async function loadGit('), ctx);
+  vm.runInContext(extract(html, 'async function load()', '// ---------- view state') + readEventsSrc + extract(html, 'async function loadProcs(', 'async function loadGit('), ctx);
   ctx.rebuild = async () => ctx.loadProcs(180);
   const pending = ctx.loadProcs(0);
   await ctx.load(); release(); await pending; await ctx.loadProcs(180);
@@ -1452,7 +1639,7 @@ async function analytics3dResilience() {
 async function mockPage(browser, data) {
   const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), seen = [], logs = [];
   p.on('console', m => logs.push(m.type() + ' ' + m.text()));
-  await p.route('**/*', route => {
+  await p.route('**/*', async route => {
     const u = new URL(route.request().url()), page = { '/': 'console.html', '/analytics': 'analytics.html', '/analytics3d': 'analytics3d.html' }[u.pathname];
     if (u.hostname !== 'arke-review.test') return route.abort();
     if (page) return route.fulfill({ contentType: 'text/html', body: read(page) });
@@ -1460,7 +1647,7 @@ async function mockPage(browser, data) {
     if (u.pathname.startsWith('/vendor/')) return route.fulfill({ contentType: 'text/javascript', body: readAsset(u.pathname.slice('/vendor/'.length)) });
     if (u.pathname.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: read(u.pathname.slice(1)) });
     seen.push(u.pathname);
-    const d = data(u);
+    const d = await data(u);  // a promise holds the answer back
     if (d === 'abort') return route.abort();
     if (typeof d === 'number') return route.fulfill({ status: d, contentType: 'application/json', body: '{"error":"fixture"}' });
     return route.fulfill({ status: d.status || 200, contentType: 'application/json', body: JSON.stringify(d.body ?? d) });
@@ -1673,7 +1860,7 @@ async function analytics3dNotes() {
       if (url.startsWith('/events')) return { events: [], next: 0 };
       horatio++; throw Object.assign(new Error('horatio is not configured on this bus'), { status: 404 });
     } });
-  vm.runInContext(extract('async function offsetAt(', 'async function loadGit(') + extract('async function loadHoratio(', '// ---------- the two side planes'), ctx);
+  vm.runInContext(extract('async function loadProcs(', 'async function loadGit(') + extract('async function loadHoratio(', '// ---------- the two side planes'), ctx);
   await ctx.loadProcs(0);
   assert.equal(ctx.X3.procsNote, 'no process samples in this window');
   await ctx.loadHoratio(0, 3600);
@@ -2036,4 +2223,4 @@ async function demoSite() {
   console.log('ok: the static demo draws the console, both analytics pages and the 3D city from the fake bus, from a subpath');
 }
 
-(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); analyticsCrossBeforeLoad(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); await demoSite(); })().catch(e => { console.error(e); process.exitCode = 1; });
+(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); analyticsCheckpointEquivalence(); await analyticsReloadEarlier(); analyticsCrossBeforeLoad(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); await demoSite(); })().catch(e => { console.error(e); process.exitCode = 1; });

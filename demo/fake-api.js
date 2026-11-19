@@ -359,6 +359,7 @@ function advance(now) {
   pending = pending.filter(p => p.ts > now);
   for (const p of ready) {
     const a = p.a, ts = p.ts;
+    if (a?.stopAt && ts > a.stopAt) continue;  // the turn running when its session ended never finishes
     if (p.tick != null) sample(ts, p.tick);
     else if (p.msg) deliver(ts, p.msg);
     else if (p.rename) rename(a, p.rename, ts, "human");
@@ -451,7 +452,7 @@ function transcript(a, q) {
   return r;
 }
 function events(q) {
-  const since = Number(q.get("since")) || 0, limit = Math.min(Number(q.get("limit")) || 20000, 20000), types = q.get("type") ? new Set(q.get("type").split(",")) : null;
+  const since = Number(q.get("since")) || 0, limit = Math.max(1, Math.min(Number(q.get("limit")) || 5000, 50000))  /* the server's default and maximum */, types = q.get("type") ? new Set(q.get("type").split(",")) : null;
   if (since > LOG.length * REC || (since && q.get("generation") && q.get("generation") !== GEN)) return err(400, "the log is shorter than that offset");
   const out = [];
   let i = Math.ceil(since / REC);

@@ -93,7 +93,7 @@ details.arr[open] > div { position: absolute; z-index: 40; top: 120%; left: 0; m
   <span class="netstat wait" id="netstat" role="status">connecting</span>
   <span class="grow"></span>
   <span class="seg" id="ranges" role="group" aria-label="Time range">
-    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="0">all</button>
+    <button class="btn" type="button" data-r="900">15m</button><button class="btn" type="button" data-r="3600">1h</button><button class="btn" type="button" data-r="21600">6h</button><button class="btn" type="button" data-r="86400">24h</button><button class="btn" type="button" data-r="604800">1w</button><button class="btn" type="button" data-r="0">all</button>
   </span>
   <select id="proj" aria-label="Project"><option value="">all projects</option></select>
   <label class="status"><input type="checkbox" id="live" checked> live</label>
@@ -244,12 +244,13 @@ async function load() {
     const rotated = await readEvents(TYPES, () => { X3.procsGen++; X3.procs = []; X3.procsNext = 0; X3.procsFrom = Infinity; });
     errSeen.clear(); $("conn").textContent = rotated;  // the bus answered: earlier errors (say, while the key was missing) are over
     await rebuild();
-    $("status").textContent = `${raw.length.toLocaleString()} events · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
+    $("status").textContent = `${raw.length.toLocaleString()} events ${loadedSpan()} · ${(next / 1e6).toFixed(1)} MB log · ${clock(nowS(), true)}`;
   } catch (e) {
     showErr(String(e.message || e), e);
     $("status").textContent = "load failed (partial data kept)";
     build(); await rebuild().catch(err => { showErr(String(err.message || err), err); });
   } finally { loading = false; }
+  if (staleWindow()) { resetEvents(); load(); }  // the range grew past the loaded data while this load ran
 }
 
 // ---------- view state ----------
@@ -487,24 +488,16 @@ function namedProcs(history, samples) {
 // ---------- side-plane data: per-agent process samples (procs events), git commits, the machine (horatio) ----------
 // Each source degrades on its own: failures are noted, never fatal.
 const X3 = { procs: [], procsFrom: Infinity, procsNext: 0, procsGen: 0, procsNote: "", git: new Map(), gitNote: "", hor: null, horNote: "", horOff: false };
-// byte offset of the first event at or after time t: binary search on the log (the server resyncs to a line start)
-async function offsetAt(t) {
-  let lo = 0, hi = next;
-  while (hi - lo > 65536) {
-    const mid = Math.floor((lo + hi) / 2), r = await api(`/events?since=${mid}&limit=1&generation=${encodeURIComponent(eventGeneration)}`);
-    if (r.events.length && r.events[0].ts < t) lo = mid; else hi = mid;
-  }
-  return lo;
-}
 async function loadProcs(w0) {
   // procs events are bulky (a sample every 15 s): only the visible window's, then increments on live reloads
   const gen = ++X3.procsGen;
   let samples = [...X3.procs], cursor = X3.procsNext, from = X3.procsFrom;
   try {
-    if (w0 < from) { samples = []; cursor = await offsetAt(w0 - 60); from = w0; }
+    if (w0 < from) { samples = []; cursor = 0; from = w0; }
     for (;;) {
       if (gen !== X3.procsGen) return;
-      const r = await api(`/events?since=${cursor}&type=procs&limit=20000&generation=${encodeURIComponent(eventGeneration)}`);
+      // from byte 0, `from` makes the server start at the window's UTC midnight (procs before it aren't kept there)
+      const r = await api(`/events?since=${cursor}&type=procs&limit=20000&generation=${encodeURIComponent(eventGeneration)}${cursor ? "" : `&from=${w0 - 60}`}`);
       if (gen !== X3.procsGen) return;
       samples.push(...r.events); const moved = r.next !== cursor; cursor = r.next;
       if (r.events.length < 20000 || !moved) break;
@@ -708,6 +701,7 @@ const recentS = () => RECENT[Number($("recent").value)] || 0;
 let rebuildGen = 0;
 async function rebuild(opts = {}) {
   if (!M) return;
+  if (staleWindow() && !loading) { resetEvents(); load(); return; }  // load() rebuilds when done; a running load rechecks at its end
   for (const b of $("ranges").children) b.setAttribute("aria-pressed", String(Number(b.dataset.r) === range));
   TL = ARR.tl;
   const ypWas = YP; YP = Math.max(HMAX * ARR.ch + 4, 62 + HMAX * (ARR.ch - 1) + gapAll() + ARR.oc); dragPlane.constant = -YP;

@@ -47,6 +47,8 @@ REWRITES: list[tuple[str, str, str, int]] = [
     ("analytics3d.html", '"/vendor/', '"./vendor/', 2),
     ("analytics-page.js", '"/#agent/"', '"./#agent/"', 1),
     ("analytics-page.js", '"/#project/"', '"./#project/"', 1),
+    # the demo's invented history covers about two days: a week-long default view would be mostly empty
+    ("analytics-page.js", 'pref("an.range", "604800")', 'pref("an.range", "86400")', 1),
 ]
 # what must not survive in a built page: a path that only the real server answers
 LEFTOVERS: tuple[str, ...] = ('src="/', 'href="/', '"/vendor/')

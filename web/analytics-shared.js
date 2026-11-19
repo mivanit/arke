@@ -79,7 +79,9 @@ function eventNames(events) {
     refs.set(e, at);
     if (e.event === "forget") current.delete(e.agent);
   }
-  return (e, name) => { const o = refs.get(e)?.get(name); return o ? root(o).name : name; };
+  const nameAt = (e, name) => { const o = refs.get(e)?.get(name); return o ? root(o).name : name; };
+  nameAt.ofSid = sid => { const o = sessions.get(sid); return o ? root(o).name : null; };  // a session's current name
+  return nameAt;
 }
 // A takeover can merge owners that shared a sample: keep both their usage and their process lists.
 function processAgents(e, nameAt) {
@@ -159,7 +161,7 @@ function buildModel(raw, agentsNow, now) {
     u.win = u.window || (u.context ? (u.model.includes("[1m]") || big.has(u.sid) ? 1e6 : 2e5) : 0);
   }
   procs.sort((a, b) => a.ts - b.ts);
-  return { lanes, msgs, touches, usage, procs, firstTool, t0: isFinite(t0) ? t0 : now - 3600, t1: Math.max(isFinite(t1) ? t1 : 0, now) };
+  return { lanes, msgs, touches, usage, procs, firstTool, ofSid: nameAt.ofSid, t0: isFinite(t0) ? t0 : now - 3600, t1: Math.max(isFinite(t1) ? t1 : 0, now) };
 }
 // busy spans [a, b] clipped to [w0, w1]
 function busySpans(L, w0, w1, agentsNow, now) {

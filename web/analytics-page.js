@@ -30,6 +30,10 @@ const colorOf = n => esc((n.startsWith("/") ? projects.find(p => p.path === n) :
 
 // ---------- the event log, and the model built from it (analytics-shared.js; rebuilt on every new batch: the whole log is a few MB) ----------
 let raw = [], next = 0, M = null, eventGeneration = "";
+// With a checkpoint (the server's compacted log before a UTC midnight, then everything after it), raw holds full detail only
+// from loadedFrom on; -Infinity when the whole log was read. cpHours: hourly tool counts per session before it ("s:<sid>").
+let loadedFrom = -Infinity, cpHours = {};
+const LIMIT = 50000;  // events per request (the server's maximum); the checkpoint doesn't count against it
 function build() { M = buildModel(raw, agentsNow, nowS()); }
 // read the events of `types` since the last read, then the agents and projects; restarted() runs when the log was replaced.
 // Returns why the log was reread from the start, or "".
@@ -38,7 +42,8 @@ async function readEvents(types, restarted) {
   const restart = why => { rotated = why; console.warn(why); raw.length = 0; next = 0; eventGeneration = ""; restarted?.(); };
   for (;;) {
     let r;
-    try { r = await api(`/events?since=${next}&type=${types}&limit=20000&procs=totals&generation=${encodeURIComponent(eventGeneration)}`); }
+    const from = next ? null : wantedFrom();  // the first page starts with the checkpoint for the window's start
+    try { r = await api(`/events?since=${next}&type=${types}&limit=${LIMIT}&procs=totals&generation=${encodeURIComponent(eventGeneration)}${from == null ? "" : `&from=${from}`}`); }
     catch (e) {
       // 400 on a nonzero cursor: the log was rotated or truncated under us, so the old offset will never be valid again.
       // Reread from the start and drop what we had, or every event would appear twice.
@@ -48,10 +53,11 @@ async function readEvents(types, restarted) {
     // the log went missing or was replaced by a shorter one (a 200 with an earlier next)
     if (r.next < next) { restart("event log was replaced: reloaded from the start"); continue; }
     eventGeneration = r.generation || eventGeneration;
+    if (!next) { loadedFrom = r.from ? r.from.day : -Infinity; cpHours = r.from?.hours || {}; }  // no `from`: an older server, or no closed day
     // procs=totals: the server cut procs events to each agent's cpu/rss (their process lists are most of the log)
     for (const e of r.events) raw.push(e); got += r.events.length;
     const moved = r.next !== next; next = r.next;
-    if (r.events.length < 20000 || !moved) break;
+    if (r.events.length < LIMIT || !moved) break;
     $("status").textContent = `loading… ${raw.length} events`;
   }
   const [ag, pr] = await Promise.all([api("/agents"), api("/projects")]);
@@ -62,8 +68,13 @@ async function readEvents(types, restarted) {
 }
 
 // ---------- view state ----------
-let range = Number(pref("an.range", "21600"));  // seconds back from now; 0 = all
+let range = Number(pref("an.range", "604800"));  // seconds back from now; 0 = all
 let win = null;  // [w0, w1] when zoomed (2D only); null = follow range
+// Where loading should start: 2 minutes before the window (the cpu and git lookbacks), or null for the whole log ("all").
+const wantedFrom = () => win ? win[0] - 120 : range ? nowS() - range - 120 : null;
+// The window needs data from before what's loaded (a longer range, zoom out, pan, "all"): reload from an earlier checkpoint.
+const staleWindow = () => loadedFrom > -Infinity && (wantedFrom() ?? -Infinity) < loadedFrom;
+function resetEvents() { raw.length = 0; next = 0; eventGeneration = ""; loadedFrom = -Infinity; cpHours = {}; }
 const winNow = () => win || [range ? Math.max(M.t0, M.t1 - range) : M.t0, M.t1];
 const projSel = () => $("proj").value;
 function fillProjects() {
@@ -111,6 +122,9 @@ function graphData(w0, w1, withProj, withHuman) {
 // ---------- side pane: details for a file or an agent ----------
 // Files are M.touches entries, keyed by host + normalized path. A page can set paneResized() to redraw when the pane moves.
 const fileAt = key => M?.touches.find(t => t.key === key);
+// what the side pane's histories cover
+const loadedSpan = () => loadedFrom > -Infinity ? `since ${dayOf(loadedFrom)} ${clock(loadedFrom)}` : "in the log";
+const sinceLoaded = t => t.ts >= loadedFrom;  // checkpoint events before it are a sample, not the history
 const fileTitle = key => { const f = fileAt(key); return f ? fileLabel(f) : ""; };
 let paneResized = () => {};
 const pane = { kind: "", key: "", seq: 0 };
@@ -149,11 +163,11 @@ function paneTimeline(touches) {
 async function paneFile(key) {
   const seq = ++pane.seq; pane.kind = "file"; pane.key = key;
   const f = fileAt(key), file = f ? { path: f.path, label: fileLabel(f), local: isLocalFile(f, agentsNow) } : { path: key, label: key, local: true }, abs = file.path;
-  const touches = M.touches.filter(t => t.key === key).map(t => ({ ts: t.ts, agent: t.agent, write: t.write, tool: t.ev.tool, target: t.ev.target, desc: t.ev.desc })).sort((a, b) => a.ts - b.ts);
+  const touches = M.touches.filter(t => t.key === key && sinceLoaded(t)).map(t => ({ ts: t.ts, agent: t.agent, write: t.write, tool: t.ev.tool, target: t.ev.target, desc: t.ev.desc })).sort((a, b) => a.ts - b.ts);
   const edits = touches.filter(t => t.write).length, agents = new Map();
   for (const t of touches) { const o = agents.get(t.agent) || { e: 0, r: 0, last: 0 }; t.write ? o.e++ : o.r++; o.last = Math.max(o.last, t.ts); agents.set(t.agent, o); }
   const head = `<div class="pp mono">${esc(file.label)}</div>`;
-  const evPart = `<h4>Touches <span class="sub">${edits} edits, ${touches.length - edits} reads in the log${touches.length ? `, first ${dayOf(touches[0].ts)} ${clock(touches[0].ts)}` : ""}</span></h4>${paneTimeline(touches)}`
+  const evPart = `<h4>Touches <span class="sub">${edits} edits, ${touches.length - edits} reads ${loadedSpan()}${touches.length ? `, first ${dayOf(touches[0].ts)} ${clock(touches[0].ts)}` : ""}</span></h4>${paneTimeline(touches)}`
     + `<table class="ptab"><tbody>${[...agents].sort((a, b) => b[1].last - a[1].last).map(([n, o]) => `<tr><td>${paneAgentLink(n)}</td><td class="r">${o.e} edits</td><td class="r">${o.r} reads</td><td class="r sub">${dur(nowS() - o.last)} ago</td></tr>`).join("")}</tbody></table>`
     + `<h4>Latest</h4><ul class="plist">${touches.slice(-25).reverse().map(t => `<li><span class="sub">${clock(t.ts)}</span> ${paneAgentLink(t.agent)} <span class="pk ${t.write ? "e" : "r"}">${t.write ? "edit" : "read"}</span> <span class="sub">${esc(t.tool)}</span>${t.desc || (t.target && t.target !== abs && !abs.endsWith("/" + t.target)) ? `<div class="sub ell" title="${esc((t.desc || t.target).slice(0, 500))}">${esc((t.desc || t.target).slice(0, 200))}</div>` : ""}</li>`).join("")}</ul>`;
   paneShow(`<span class="pk f">file</span> ${esc(abs.split("/").pop())}`, head + `<div id="pfinfo" class="sub">looking the file up…</div>` + evPart);
@@ -175,7 +189,7 @@ const paneAgentLink = n => n === "human" ? `<span class="mono" style="color:var(
   : `<a class="name" style="--c:${colorOf(n)}" href="${esc(agentHref(n))}">${esc(n)}</a>`;
 async function paneAgent(name) {
   const seq = ++pane.seq; pane.kind = "agent"; pane.key = name;
-  const a = agentsNow.find(x => x.name === name), tools = (M?.lanes.get(name)?.tools || []).slice(-25).reverse();
+  const a = agentsNow.find(x => x.name === name), tools = (M?.lanes.get(name)?.tools || []).filter(sinceLoaded).slice(-25).reverse();
   const kv = (k, v) => v == null || v === "" ? "" : `<dt>${k}</dt><dd>${v}</dd>`;
   const info = a ? `<dl class="pdl">${kv("state", `<span class="flag ${esc(a.state)}">${esc(a.state)}</span>${a.reachable && a.reachable !== "yes" ? ` <span class="flag off" title="${esc(a.reachable_why || "")}">${esc(a.reachable)}</span>` : ""}${a.last_active ? ` <span class="sub">active ${dur(nowS() - a.last_active)} ago</span>` : ""}`)}`
     + kv("task", a.about ? esc(a.about) : `<span class="sub">no task set</span>`)
@@ -185,7 +199,7 @@ async function paneAgent(name) {
     + kv("host", esc(a.host || "")) + kv("tmux", a.tmux_session ? `<span class="mono">${esc(a.tmux_session)}</span>` : "")
     + kv("projects", Object.keys(a.projects || {}).map(p => `<a class="proj" style="--c:${colorOf(p)}" href="${esc(projHref(p))}">${esc(p)}</a>`).join(" "))
     + `</dl>` : `<p class="sub">Not on the bus right now (only in the event log).</p>`;
-  const toolHtml = `<h4>Recent tool calls <span class="sub">${tools.length ? "newest first" : "none in the log"}</span></h4><ul class="plist">${tools.map(t => `<li><span class="sub">${clock(t.ts)}</span> <span class="pk ${t.kind === "edit" ? "e" : t.kind === "read" ? "r" : "s"}">${esc(t.tool)}</span><div class="sub ell" title="${esc((t.desc || t.target).slice(0, 600))}">${esc((t.desc || t.target).slice(0, 220))}</div></li>`).join("")}</ul>`;
+  const toolHtml = `<h4>Recent tool calls <span class="sub">${tools.length ? "newest first" : `none ${loadedSpan()}`}</span></h4><ul class="plist">${tools.map(t => `<li><span class="sub">${clock(t.ts)}</span> <span class="pk ${t.kind === "edit" ? "e" : t.kind === "read" ? "r" : "s"}">${esc(t.tool)}</span><div class="sub ell" title="${esc((t.desc || t.target).slice(0, 600))}">${esc((t.desc || t.target).slice(0, 220))}</div></li>`).join("")}</ul>`;
   paneShow(`<span class="pk a">agent</span> ${esc(name)} <a class="btn" href="${esc(agentHref(name))}" title="open ${esc(name)} in the console">console &rarr;</a>`,
     info + `<div id="pmsgs"><h4>Messages</h4><p class="sub">loading…</p></div>` + toolHtml);
   let msgs = [], note = "";

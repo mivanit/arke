@@ -97,19 +97,15 @@ def rules(e: dict[str, Any]) -> list[tuple[str, str]]:
         source: str = str(e.get("source", ""))
         out.append(("newest", f"usage|{sid}|{source}"))  # the tokens-out baseline
         context: float = number(e.get("context"))
+        # the context gauge's starting value
         if context > 0:
-            out.append(
-                ("newest", f"context|{sid}|{source}")
-            )  # the context gauge's starting value
+            out.append(("newest", f"context|{sid}|{source}"))
+        # the window guess: 1M once a session went past 200k
         if context > 200000:
-            out.append(
-                ("first", f"big|{sid}")
-            )  # the window guess: 1M once a session went past 200k
+            out.append(("first", f"big|{sid}"))
     elif ev == "tool":
-        out += [
-            ("first", f"tool|{sid}"),
-            ("last", f"tool|{sid}"),
-        ]  # lane first seen; last tool / silent
+        # the lane's last tool call and "silent" in the now table (the log's first one is kept as "type|tool")
+        out.append(("last", f"tool|{sid}"))
         projects: Any = e.get("projects")
         for p in projects if isinstance(projects, list) else []:
             out.append(("first", f"project|{sid}|{p}"))  # the project filter
