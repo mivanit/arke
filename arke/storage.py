@@ -149,30 +149,26 @@ class Store:
         self.agent_rows, self.meta_rows, self.message_rows = agents, meta, messages
 
     def backup(self, target: Path) -> None:
-        """A standalone consistent database, including committed WAL data; writes may continue."""
-        with target.open("xb"):
-            pass
-        with (
-            closing(
-                sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)
-            ) as source,
-            closing(sqlite3.connect(target)) as dest,
-        ):
-            # Pin one WAL snapshot so continuous hooks cannot restart the copy indefinitely.
-            source.execute("BEGIN")
-            source.execute("SELECT value FROM meta WHERE key='next_id'").fetchone()
-            source.backup(dest, pages=128, sleep=0.01)
-            source.rollback()
-            dest.execute("PRAGMA journal_mode=DELETE")
-            if dest.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                raise OSError("backup failed SQLite integrity_check")
-        sync_file(target)
-        sync_dir(target.parent)
+        backup(self.path, target)
 
-    def compact(self, pages: int = 128) -> int:
-        """Bounded work between bus mutations; no whole-database VACUUM pause."""
-        before: int = int(self.db.execute("PRAGMA freelist_count").fetchone()[0])
-        self.db.execute(f"PRAGMA incremental_vacuum({int(pages)})").fetchall()
-        self.db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
-        after: int = int(self.db.execute("PRAGMA freelist_count").fetchone()[0])
-        return before - after
+
+def backup(source_path: Path, target: Path) -> None:
+    """A standalone consistent copy of a database, including committed WAL data; the bus may keep writing."""
+    with target.open("xb"):
+        pass
+    with (
+        closing(
+            sqlite3.connect(source_path.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as source,
+        closing(sqlite3.connect(target)) as dest,
+    ):
+        # Pin one WAL snapshot so continuous hooks cannot restart the copy indefinitely.
+        source.execute("BEGIN")
+        source.execute("SELECT value FROM meta WHERE key='next_id'").fetchone()
+        source.backup(dest, pages=128, sleep=0.01)
+        source.rollback()
+        dest.execute("PRAGMA journal_mode=DELETE")
+        if dest.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise OSError("backup failed SQLite integrity_check")
+    sync_file(target)
+    sync_dir(target.parent)

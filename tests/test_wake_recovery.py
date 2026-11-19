@@ -497,21 +497,3 @@ class TestWakeRecovery:
         assert a["state"] == "busy"
         self.bus.turn_pass()
         assert a["state"] == "idle"
-
-    def test_offline_board_only_agent_can_expire_after_archival(self) -> None:
-        a: dict[str, Any] = self.agent()
-        self.send("/p", mode="board")
-        self.bus.hook({"session_id": "a", "event": "SessionEnd"})
-        with self.bus.change():
-            a["last_active"] = time.time() - server.OFFLINE_DROP_S - 1
-            self.bus.save()
-        self.bus.forget_old()
-        assert "a" in self.bus.agents
-        job: dict[str, Any] = self.bus.maintenance.start(7)
-        deadline: float = time.monotonic() + 5
-        while job["status"] == "running" and time.monotonic() < deadline:
-            time.sleep(0.01)
-            job = self.bus.maintenance.status(job["id"])
-        assert job["status"] == "complete", job
-        assert (Path(job["backup"]) / "state.sqlite3.gz").is_file()
-        assert "a" not in self.bus.agents

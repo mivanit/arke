@@ -579,7 +579,7 @@ class TestLifecycle:
             assert f"task for thread {n}" in out["block"]
             assert self.bus.agents[str(n)]["inbox"] == []
 
-    def test_superseded_session_records_wait_for_archival(self) -> None:
+    def test_superseded_session_records_are_kept(self) -> None:
         self.hook("a", names=["alpha"], tmux="/sock:%0")
         self.hook("b", names=["alpha"], tmux="/sock:%0")
         assert "a" in self.bus.retired
@@ -587,7 +587,7 @@ class TestLifecycle:
         self.bus.forget_old()
         assert "a" in self.bus.retired, "recent: kept"
         assert "gone-long-ago" in self.bus.left
-        self.bus.retired["a"]["at"] -= server.OFFLINE_DROP_S + 1
+        self.bus.retired["a"]["at"] -= 30 * 86400
         self.bus.forget_old()
         assert "a" in self.bus.retired
 

@@ -43,6 +43,24 @@ def path(value: str | Path) -> Path:
     return result if result.is_absolute() else ROOT / result
 
 
+def state_dir(values: dict[str, Any]) -> Path:
+    """The server's state folder, from ARKE_DIR or the [server] section given."""
+    if os.environ.get("ARKE_DIR"):
+        return Path(os.environ["ARKE_DIR"])
+    return path(values.get("state_dir", ".local/server"))
+
+
+def log_file(values: dict[str, Any]) -> Path:
+    """The server's event log, from ARKE_LOG or the [server] section given."""
+    if os.environ.get("ARKE_LOG"):
+        return Path(os.environ["ARKE_LOG"])
+    return (
+        path(values["log_file"])
+        if "log_file" in values
+        else state_dir(values) / "log.jsonl"
+    )
+
+
 def read_key(value: str) -> str:
     """Read a private, generated key. Never include its contents in an error."""
     filename: Path = path(value)

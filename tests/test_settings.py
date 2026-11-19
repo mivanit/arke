@@ -653,14 +653,6 @@ server.NTFY_URL,server.HORATIO_URL,server.STALE_S,server.PROC_S,list(map(str,tra
                 {"to": ["/demo"], "text": "Review complete.", "mode": "board"},
             )
             assert curl("/log?project=/demo")
-            job: Any = curl("/maintenance", {"keep_days": 7, "trim": False})
-            for _ in range(100):
-                status: Any = curl("/maintenance?id=" + job["id"])
-                if status["status"] != "running":
-                    break
-                time.sleep(0.02)
-            assert status["status"] == "complete", status
-            assert (Path(status["backup"]) / "state.sqlite3.gz").is_file()
 
 
 def test_installer_refuses_old_python() -> None:

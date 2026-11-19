@@ -107,7 +107,9 @@ def test_agent_save_then_send_trim_and_backup(bus: server.Bus, tmp_path: Path) -
     seed(bus)
     bus.hook({"session_id": "a", "event": "PostToolUse"})
     assert bus.send("human", {"to": ["alice"], "text": "new"})["id"] == 2
-    assert bus.trim_backed_up({1, 2}) == 1
+    with bus.change():  # history with a gap: an older version could trim read mail
+        bus.messages = [m for m in bus.messages if m["id"] != 1]
+        bus.save()
     target = tmp_path / "snapshot.sqlite3"
     bus.store.backup(target)
     with sqlite3.connect(target) as db:

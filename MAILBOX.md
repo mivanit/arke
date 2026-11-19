@@ -33,7 +33,6 @@ Regression coverage: `test_preparing_mail_preserves_the_inbox` and `test_obsolet
 | Superseded session explicitly resumes in a different process | SessionStart can register it again; ordinary stale hooks cannot | `test_explicit_resume_in_new_harness_is_allowed`, `test_retired_hooks_cannot_replace_successor_after_restart` |
 | Both mailboxes contain the same unread message | Transfer produces one entry, preserving notify over board and direct over indirect | `test_a_takeover_merges_inboxes_keeping_the_stronger_delivery` |
 | Old receipt arrives after transfer and server restart | Old session's acknowledgment fails; successor still has the unread message | `test_inbox_receipts_survive_restart_and_takeover` |
-| Retired/departed-process records encounter maintenance | Keep active guards; do not prune records changed since backup | `test_session_cleanup_waits_for_archive_and_keeps_active_guards`, `test_resumed_session_still_rejects_stale_hooks_after_archiving` |
 
 The tests are in [test_server.py](tests/test_server.py), [test_lifecycle.py](tests/test_lifecycle.py), [test_storage.py](tests/test_storage.py), and [test_mailbox.py](tests/test_mailbox.py). Registration's seat rule is separate from automatic name selection; do not accidentally apply the nested/daemon name restriction to every form of explicit handoff. Daemon hook input clears inherited tmux identity before these decisions run.
 

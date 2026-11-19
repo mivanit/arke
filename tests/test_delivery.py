@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -251,19 +249,36 @@ class TestDeliveryIntegration(DeliveryFixture):
         assert client.call("GET", "/filesizes?" + query) == files
 
     def test_a_chunked_body_is_refused_not_read_as_empty(self) -> None:
-        """Without Content-Length the body went unread: a maintenance request ran with the default trim."""
+        """Without Content-Length the body went unread, so the request ran with every field at its default."""
         with socket.create_connection(
             ("127.0.0.1", self.http.server_port), timeout=5
         ) as s:
-            body: bytes = b'{"trim":false}'
+            body: bytes = b'{"color":"red"}'
             s.sendall(
-                b"POST /maintenance HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Agent-As: human\r\n"
+                b"POST /color HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Agent-As: human\r\n"
                 b"Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
                 + f"{len(body):x}\r\n".encode()
                 + body
                 + b"\r\n0\r\n\r\n"
             )
             assert s.recv(100).startswith(b"HTTP/1.0 411 ")
+
+    def test_no_request_can_start_a_backup_or_trim(self) -> None:
+        """/maintenance used to back up and, by default, trim history for anyone who claimed to be the person."""
+        self.bus.send("human", {"to": ["alice"], "text": "kept"})
+        url: str = f"http://127.0.0.1:{self.http.server_port}/maintenance"
+        for data in (b"{}", None):
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json", "X-Agent-As": "human"},
+            )
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                urllib.request.urlopen(req, timeout=5)
+            assert refused.value.code == 404
+        assert len(self.bus.messages) == 1
+        assert not (self.bus.state_file.parent / "backups").exists()
+        assert not hasattr(self.bus, "maintenance")
 
     def test_human_sends_store_only_a_known_source(self) -> None:
         req = urllib.request.Request(
@@ -289,16 +304,6 @@ class TestDeliveryIntegration(DeliveryFixture):
         assert (
             stored["via"] == "console"
         )  # the "(web console)" tag in agents' mail depends on it
-
-    def test_agents_cant_start_maintenance(self) -> None:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.http.server_port}/maintenance",
-            data=b"{}",
-            headers={"Content-Type": "application/json", "X-Agent-Session": "a"},
-        )
-        with pytest.raises(urllib.error.HTTPError) as refused:
-            urllib.request.urlopen(req, timeout=5)
-        assert refused.value.code == 403
 
     def test_a_tmux_header_without_a_pane_gets_the_409(self) -> None:
         self.bus.agents["a"]["tmux"] = "/sock:%1"
@@ -734,46 +739,3 @@ class TestDeliveryIntegration(DeliveryFixture):
         )
         assert retry["replayed"]
         assert len(self.bus.messages) == 1
-
-    def test_maintenance_script_runs_against_private_server(self) -> None:
-        self.bus.send("human", {"to": ["alice"], "text": "read before trim"})
-        self.bus.acknowledge("a", "", {"ids": [1]})
-        base: str = f"http://127.0.0.1:{self.http.server_port}"
-        result: subprocess.CompletedProcess[str] = subprocess.run(
-            [
-                sys.executable,
-                str(server.HERE / "maintain.py"),
-                "--server",
-                base,
-                "--days",
-                "0",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert '"status": "complete"' in result.stdout
-        assert '"messages_removed": 1' in result.stdout
-        assert self.bus.messages == []
-        assert list((self.bus.state_file.parent / "backups").glob("*/manifest.json"))
-        bad: dict[str, str] = {**os.environ, "ARKE_URL": "http://x/path"}
-        script: str = str(server.HERE / "maintain.py")
-        assert (
-            subprocess.run(
-                [sys.executable, script, "--help"],
-                env=bad,
-                capture_output=True,
-                check=False,
-            ).returncode
-            == 0
-        )
-        failed: subprocess.CompletedProcess[str] = subprocess.run(
-            [sys.executable, script, "--status", "j"],
-            env=bad,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert failed.stderr.startswith("maintenance: server address"), failed.stderr
