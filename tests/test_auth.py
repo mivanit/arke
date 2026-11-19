@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import threading
 import urllib.error
 import urllib.request
@@ -93,7 +92,6 @@ class TestAuthentication(test_delivery.DeliveryFixture):
             "/git",
             "/machine",
             "/horatio/history",
-            "/maintenance",
             "/%61gents",
             "//agents",
             "/unknown",
@@ -107,7 +105,6 @@ class TestAuthentication(test_delivery.DeliveryFixture):
             "/name",
             "/about",
             "/color",
-            "/maintenance",
         ]
         self.bus.send("human", {"to": ["alice"], "text": "still queued"})
         before: dict[str, Any] = self.bus.agents["a"].copy()
@@ -284,45 +281,6 @@ class TestAuthentication(test_delivery.DeliveryFixture):
             finally:
                 redirect.shutdown()
                 thread.join(2)
-
-    def test_maintenance_uses_the_same_key_and_server_binding(self) -> None:
-        config: Path = self.root / "config.toml"
-        config.write_text(
-            f'[client]\nurl="{self.base}"\nkey_file="{self.keyfile}"\n'
-            f"state_dir={json.dumps(str(self.root / 'maintenance-client'))}\n"
-        )
-        env: dict[str, str] = {
-            k: v
-            for k, v in os.environ.items()
-            if k
-            not in (
-                "CODEX_THREAD_ID",
-                "CLAUDE_CODE_SESSION_ID",
-                "ARKE_HELPER_ID",
-                "ARKE_PARENT_SESSION",
-            )
-        } | {"ARKE_CONFIG": str(config), "ARKE_URL": self.base, "ARKE_AS": "human"}
-        command: list[str] = [
-            sys.executable,
-            str(server.HERE / "maintain.py"),
-            "--backup-only",
-        ]
-        result: subprocess.CompletedProcess[str] = subprocess.run(
-            command, env=env, capture_output=True, text=True, timeout=10, check=False
-        )
-        assert result.returncode == 0, result.stderr
-        assert '"status": "complete"' in result.stdout
-        assert KEY not in result.stdout + result.stderr
-        result = subprocess.run(
-            command + ["--server", "http://other.invalid:7777"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        assert result.returncode != 0
-        assert "differs from client.url" in result.stderr
 
 
 class TestBrowserOrigin(test_delivery.DeliveryFixture):

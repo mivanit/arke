@@ -15,7 +15,6 @@ from typing import Any
 from unittest.mock import patch
 
 import client
-import maintain
 import pytest
 import server
 
@@ -175,18 +174,6 @@ def test_helper_cannot_change_saved_server(args: list[str], tmp_path: Path) -> N
     assert config.read_text() == "http://localhost:7777\n"
 
 
-def test_helper_cannot_start_maintenance() -> None:
-    with (
-        patch.object(client, "identity", return_value=("parent", "child")),
-        patch.object(maintain.argparse.ArgumentParser, "parse_args") as parse,
-        patch.object(client, "open_bus") as transport,
-        pytest.raises(SystemExit, match="sub-agents cannot start maintenance"),
-    ):
-        parse.return_value.status = None
-        maintain.main()
-    transport.assert_not_called()
-
-
 def test_helper_send_to_old_server_never_falls_back_to_regular_send() -> None:
     error: urllib.error.HTTPError = urllib.error.HTTPError(
         "http://old-server/helper/send",
@@ -318,7 +305,7 @@ class TestHelperDelivery(DeliveryFixture):
 
     @pytest.mark.parametrize(
         "path",
-        ["/hook", "/ack", "/name", "/about", "/projects", "/color", "/maintenance"],
+        ["/hook", "/ack", "/name", "/about", "/projects", "/color"],
     )
     def test_helper_writes_rejected_by_client_and_server(self, path: str) -> None:
         before: str = json.dumps(self.bus.agents, sort_keys=True)

@@ -793,16 +793,14 @@ class TestServer:
         assert "delivery" not in out
         assert a["inbox"] == []
 
-    def test_offline_agents_are_not_removed_without_archiving(self) -> None:
+    def test_offline_agents_are_never_removed_by_age(self) -> None:
         for sid, name in (("a", "alice"), ("b", "bob")):
             self.agent(sid, name)
         self.bus.send("human", {"to": ["/p"], "text": "a project post"})
         self.send(["bob"])
         for sid in ("a", "b"):
             self.bus.hook({"session_id": sid, "event": "SessionEnd"})
-            self.bus.agents[sid]["last_active"] = (
-                time.time() - server.OFFLINE_DROP_S - 1
-            )
+            self.bus.agents[sid]["last_active"] = time.time() - 30 * 86400
         self.bus.forget_old()
         assert sorted(self.bus.agents) == ["a", "b"]
 

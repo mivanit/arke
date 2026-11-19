@@ -118,7 +118,9 @@ def test_mail_lookup_handles_trimmed_gaps_restart_and_new_sends(
     for n in range(1, 6):
         bus.send("human", {"to": ["alice"], "text": f"task {n}"})
     bus.acknowledge("a", "", {"ids": [1, 3, 5]})
-    assert bus.trim_backed_up({1, 3, 5}) == 3
+    with bus.change():  # history with gaps: an older version could trim read mail
+        bus.messages = [m for m in bus.messages if m["id"] not in {1, 3, 5}]
+        bus.save()
     assert [m["id"] for m in bus.inbox(agent, 0, receipt=True)["messages"]] == [2, 4]
     bus.store.close()
     restored: server.Bus = server.Bus(bus.state_file)

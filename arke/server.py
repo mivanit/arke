@@ -18,7 +18,7 @@ Layout (plain scripts in this folder, imported by name; none of them imports ser
     native.py       Claude's background wake listener (not mailbox delivery)
     procs.py        processes on this machine, from /proc
     storage.py      the SQLite store, and the Agent / Message record types
-    maintain.py     backups and log trims (run by the bus; also its CLI)
+    maintain.py     the backup command, run on the bus host (not used by the server)
     client.py       the CLI and harness hooks; roster.py the roster text; settings.py the TOML configuration
 """
 
@@ -58,7 +58,6 @@ from typing import Any, ClassVar, Literal, Never, TextIO
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 import client  # shared settings (same folder)
-import maintain
 import roster
 import settings
 from client import printable
@@ -85,18 +84,8 @@ ASSETS: Path = (
     HERE.parent / ".local/web"
 )  # downloaded by install-service.py, not checked into Git
 SETTINGS: dict[str, Any] = client.SETTINGS.get("server", {})
-STATE_DIR: Path = (
-    Path(os.environ["ARKE_DIR"])
-    if os.environ.get("ARKE_DIR")
-    else settings.path(SETTINGS.get("state_dir", ".local/server"))
-)
-LOG_FILE: Path = (
-    Path(os.environ["ARKE_LOG"])
-    if os.environ.get("ARKE_LOG")
-    else settings.path(SETTINGS["log_file"])
-    if "log_file" in SETTINGS
-    else STATE_DIR / "log.jsonl"
-)
+STATE_DIR: Path = settings.state_dir(SETTINGS)
+LOG_FILE: Path = settings.log_file(SETTINGS)
 CLIENT: str = client.shell_path(
     HERE / "client.py"
 )  # how agents run the client (same layout everywhere)
@@ -106,9 +95,6 @@ NTFY_URL: str = os.environ.get("ARKE_NTFY", SETTINGS.get("ntfy_url", ""))  # emp
 # extra Host names browsers may use for the pages (a reverse proxy, a DNS alias); see browser_host
 BROWSER_HOSTS: list[str] = [h.lower() for h in SETTINGS.get("browser_hosts", [])]
 PORT: int = client.PORT
-OFFLINE_DROP_S: float = (
-    24 * 3600
-)  # forget offline agents with no unread direct mail after this
 WAKE_BATCH_S: float = (
     1.5  # wait this long after the first message so a burst becomes one wake-up
 )
@@ -339,30 +325,6 @@ class Bus:
                 f"loaded {len(self.agents)} agents, {len(self.messages)} messages",
                 flush=True,
             )
-        self.maintenance: maintain.Maintenance = maintain.Maintenance(
-            self, LOG_FILE, LOG_LOCK
-        )
-
-    def trim_backed_up(self, ids: set[int]) -> int:
-        """Trim only immutable records present in the completed backup; keep all currently unread mail."""
-        with self.change():
-            unread: set[Any] = {
-                item[0] for a in self.agents.values() for item in a["inbox"]
-            }
-            before: int = len(self.messages)
-            self.messages = [
-                m for m in self.messages if m["id"] not in ids or m["id"] in unread
-            ]
-            if before != len(self.messages):
-                self.save()
-            return before - len(self.messages)
-
-    def compact(self) -> None:
-        for _ in range(10000):
-            with self.cond:
-                if not self.store.compact():
-                    break
-            time.sleep(0.005)
 
     def save(self) -> None:
         """Mark this change() for commit; it commits before returning."""
@@ -1245,7 +1207,7 @@ class Bus:
             mid, mode, is_direct = item
             m: Message | None = self.message(mid)
             if m is None:
-                continue  # trimmed (only read mail is; see maintain.py)
+                continue  # no longer in history (an older version could trim read mail)
             if is_direct:
                 direct.append(m)
             elif not everything:
@@ -2679,7 +2641,7 @@ class Bus:
         return [self.public(a) for a in agents]
 
     def forget_old(self) -> None:
-        """Mark dead local agents offline. Age-based removal happens only after maintenance archives the state."""
+        """Mark dead local agents offline. They are never removed automatically."""
         with self.change(messages_changed=False):
             for a in self.agents.values():
                 if (
@@ -2703,50 +2665,6 @@ class Bus:
                 for sid, seen in self.roster_seen.items()
                 if sid in self.agents
             }
-
-    def prune_backed_up(
-        self, saved: dict[str, Any], archived_at: float
-    ) -> dict[str, int]:
-        """Prune only unchanged records from a durable archive; active sessions keep their stale-process guards."""
-        removed: dict[str, int] = {
-            "agents_removed": 0,
-            "retired_removed": 0,
-            "left_removed": 0,
-        }
-        cutoff: float = archived_at - OFFLINE_DROP_S
-        with self.change():
-            for sid, a in list(self.agents.items()):
-                persisted: dict[str, Any] = {
-                    k: v for k, v in a.items() if k not in VOLATILE
-                }
-                last: Any = a.get("last_active") or a["started_at"]
-                if (
-                    a["state"] == "offline"
-                    and not any(item[2] for item in a["inbox"])
-                    and last < cutoff
-                    and saved.get("agents", {}).get(sid) == persisted
-                ):
-                    del self.agents[sid]
-                    self.record("forget", agent=a["name"])
-                    removed["agents_removed"] += 1
-            for sid, r in list(self.retired.items()):
-                if (
-                    r.get("at", archived_at) < cutoff
-                    and saved.get("retired", {}).get(sid) == r
-                ):
-                    del self.retired[sid]
-                    removed["retired_removed"] += 1
-            for sid, tokens in list(self.left.items()):
-                if (
-                    sid not in self.agents
-                    and sid not in self.retired
-                    and saved.get("left", {}).get(sid) == tokens
-                ):
-                    del self.left[sid]
-                    removed["left_removed"] += 1
-            if any(removed.values()):
-                self.save()
-        return removed
 
     def update(
         self, sid: str, as_name: str, body: dict[str, Any], tmux: str = ""
@@ -3532,20 +3450,6 @@ class Handler(BaseHTTPRequestHandler):
                     out = bus.rename(sid, as_name, body, tmux)
                 case "POST", ["color"]:
                     out = bus.set_color(body)
-                case "POST", ["maintenance"]:
-                    with bus.cond:
-                        asker: str = bus.sender(sid, as_name, tmux)
-                    if asker != "human":
-                        raise HttpError(
-                            403, "only a person can back up and trim history"
-                        )
-                    out = bus.maintenance.start(
-                        body.get("keep_days", 7),
-                        body.get("trim", True),
-                        body.get("request_id", ""),
-                    )
-                case "GET", ["maintenance"]:
-                    out = bus.maintenance.status(q.get("id", ""))
                 case _:
                     raise HttpError(404, f"no route {method} {url.path} (see /help)")
         except HttpError as e:

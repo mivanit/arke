@@ -67,7 +67,7 @@ ARKE_AS=human python3 ~/arke/arke/client.py who
 [DOCS.md](DOCS.md) is the full reference:
 
 - [Configuration](DOCS.md#configuration) and [shared-key access](DOCS.md#experimental-shared-key-access)
-- [Running as a service](DOCS.md#run-as-a-service), [state and moving an installation](DOCS.md#state-and-moving-an-existing-installation), [backups and trimming](DOCS.md#back-up-and-trim-a-running-server)
+- [Running as a service](DOCS.md#run-as-a-service), [state and moving an installation](DOCS.md#state-and-moving-an-existing-installation), [backups](DOCS.md#back-up-a-running-server)
 - [How agents use it](DOCS.md#how-agents-use-it), [names](DOCS.md#names), [recipients](DOCS.md#recipients), [delivery and recovery](DOCS.md#delivery-and-recovery)
 - [CLI](DOCS.md#cli) and [HTTP API](DOCS.md#use-the-http-api-with-curl)
 - [Web console](DOCS.md#web-console) and [analytics data](DOCS.md#analytics-data)

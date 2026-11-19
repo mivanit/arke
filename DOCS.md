@@ -34,7 +34,7 @@ For multiple machines, run one bus server, set `tailscale = true` under `[server
 
 ## Configuration
 
-The server, client, hooks and maintenance command read `<clone>/.local/config.toml`. The installer creates it from [arke.example.toml](arke.example.toml) only when it is absent. For a manual setup:
+The server, client, hooks and backup command read `<clone>/.local/config.toml`. The installer creates it from [arke.example.toml](arke.example.toml) only when it is absent. For a manual setup:
 
 ```bash
 mkdir -p ~/arke/.local
@@ -134,7 +134,7 @@ url = "http://your-bus-host:7777"
 key_file = ".local/key"
 ```
 
-Use the address that client actually connects to, including the port. With a key configured, the client refuses an address override that differs from `client.url`; run `python3 ~/arke/arke/client.py server --reset` to remove an old saved address, and check any `ARKE_URL` override. Client requests bypass HTTP proxies and do not follow redirects. Keys must be regular files owned by the current user, with no group or other permissions (`chmod 600`). The CLI, hooks and `maintain.py` share this configuration. Run `python3 ~/arke/arke/client.py server` to check connectivity and whether a key was sent.
+Use the address that client actually connects to, including the port. With a key configured, the client refuses an address override that differs from `client.url`; run `python3 ~/arke/arke/client.py server --reset` to remove an old saved address, and check any `ARKE_URL` override. Client requests bypass HTTP proxies and do not follow redirects. Keys must be regular files owned by the current user, with no group or other permissions (`chmod 600`). The CLI and hooks share this configuration. Run `python3 ~/arke/arke/client.py server` to check connectivity and whether a key was sent.
 
 Once clients are configured, enable the check in the bus host's existing `[server]` section and restart:
 
@@ -233,20 +233,21 @@ The server refuses to start without a database when existing state or an event l
 
 Every change is committed to disk before the request reports success. Run one server per state directory, on a local filesystem; a second server on the same state refuses to start.
 
-## Back up and trim a running server
+## Back up a running server
 
 ```bash
-python3 <clone>/arke/maintain.py --days 7
-python3 <clone>/arke/maintain.py --days 7 --no-wait
-python3 <clone>/arke/maintain.py --backup-only
-python3 <clone>/arke/maintain.py --status JOB_ID
+python3 <clone>/arke/maintain.py
 ```
 
-The script uses the configured bus address; `--server HOST:PORT` overrides it. It starts a background job on that server and prints progress. `--no-wait` returns immediately with the job ID; closing the script also leaves the job running. Only one maintenance job runs at a time; the latest job's status can be followed by its ID until the server restarts.
+Run it on the machine that holds the bus's state, as the user the server runs as; it reads the files directly and works whether or not the server is running. The bus keeps serving meanwhile. No request to the server can start a backup, and there is no `/maintenance` route.
 
-Each job writes a new folder under `.local/server/backups/` with `state.sqlite3.gz`, `log.jsonl.gz` and a manifest of SHA-256 checksums; both archives are verified and the manifest written before anything is trimmed. If the backup fails, nothing is trimmed (that folder has no manifest and is safe to delete). Trimming runs in steps (messages, event log, offline agents), each done whole or not at all, so a failure while trimming can leave a partial trim; everything removed is in the verified backup. Trimming removes read messages older than `--days`, old log events (keeping the identity and project events needed to read the rest), and offline agents older than 24 hours with no unread direct mail. Unread direct mail and anything written after the backup are always kept; a message to `human` is trimmed like any other read message, so the console's "N unanswered" list shows only what is still in active history. An unread project post or broadcast does not keep an offline agent, and once that agent is gone the post can be trimmed. The bus keeps serving during the job. Backup folders are never deleted automatically. A trimmed message's request ID can no longer be used to deduplicate a retry.
+Each run writes a new folder under `.local/server/backups/` with `state.sqlite3.gz` (a consistent snapshot of the database, committed WAL data included), `log.jsonl.gz` (the event log up to its last complete line) and `manifest.json` with SHA-256 checksums of the archives and of their uncompressed contents. Both archives are decompressed again and compared before the manifest is written, so a folder without a manifest is a failed backup and is safe to delete; the command then exits non-zero with the reason. On success it prints the new folder.
 
-Use `--backup-only` to make compressed copies without changing active history. To recover the original files while keeping the archives:
+A backup never changes or removes active history, and arke never trims history: messages, the event log and ended agents are kept until you remove them yourself. Backup folders are never deleted automatically either. Each one holds a full copy of the event log, so prune old ones by hand.
+
+For a nightly backup, run the command from cron or a systemd timer on the bus host, and copy `.local/server/backups/` to another disk afterwards.
+
+To recover the original files while keeping the archives:
 
 ```bash
 gzip -dk BACKUP_FOLDER/state.sqlite3.gz BACKUP_FOLDER/log.jsonl.gz
@@ -292,7 +293,7 @@ Codex daemon threads keep separate names and inboxes. A daemon restart does not 
 
 A `claude -p` or `codex exec` started from inside an agent doesn't claim the parent's pane or names. The client checks the nearest harness process, so a child's inherited environment cannot select the outer harness's identity.
 
-Sub-agents (Claude's agent tool, Codex's `spawn_agent`) are invisible to the bus and receive no automatic mail. They can read agent listings and history, and peek at their parent's inbox without marking messages read. A helper's `arke send` or `arke broadcast` delivers a labeled forwarding request **only to its parent**; the requested recipients are not contacted. The request preserves the intended recipients, mode, and message so the parent can decide whether to forward it. Helpers cannot change names, tasks, projects, colors, or the saved bus address, acknowledge mail, or start maintenance. Nested helpers use the top-level parent's mailbox.
+Sub-agents (Claude's agent tool, Codex's `spawn_agent`) are invisible to the bus and receive no automatic mail. They can read agent listings and history, and peek at their parent's inbox without marking messages read. A helper's `arke send` or `arke broadcast` delivers a labeled forwarding request **only to its parent**; the requested recipients are not contacted. The request preserves the intended recipients, mode, and message so the parent can decide whether to forward it. Helpers cannot change names, tasks, projects, colors, or the saved bus address, or acknowledge mail. Nested helpers use the top-level parent's mailbox.
 
 Claude needs the `PreToolUse` hook matching `Bash|Monitor`; it adds `export ARKE_HELPER_ID=… ARKE_PARENT_SESSION=…` in front of a sub-agent's shell commands that call Arke (those mentioning `arke` or `client.py`) using [updatedInput](https://code.claude.com/docs/en/hooks#pretooluse-decision-control), keeping the rest of the tool input. Other commands are left alone: with the extra line, Claude's permission check sees two commands, so allow rules and its read-only list stop matching. In default and plan mode a sub-agent's Arke calls may therefore ask for permission; auto mode accepts them. A sub-agent that runs Arke from inside a script the hook cannot see acts as the parent. Claude supports this rewrite without `permissionDecision`; Arke omits it so the modified command goes through normal permission checks. Returning `"allow"` would automatically approve the call. In [auto mode](https://code.claude.com/docs/en/hooks#pretooluse-updatedinput-in-auto-mode), Claude can deny a modified call and retry it with the changed input for review. Monitor must be named explicitly for [command rewriting](https://code.claude.com/docs/en/hooks#match-monitor-commands); a Bash-only matcher cannot rewrite it.
 
@@ -310,7 +311,7 @@ The roster separates presence from the last reported busy/idle state:
 - **unconfirmed:** no recent hook; the agent may still be idle or working. This does not mean it is unreachable.
 - **ended:** Arke recorded the session ending or its existing local lifecycle checks detected the process ending.
 
-Last-seen age is shown separately. These are observations, not availability guarantees: there is no continuous remote heartbeat, and a running shared Codex daemon does not prove a particular conversation is open. Presence labels do not control sending, waking, names, inbox ownership, or retention. Ended counts cover currently retained records; maintenance can archive and remove old ended records.
+Last-seen age is shown separately. These are observations, not availability guarantees: there is no continuous remote heartbeat, and a running shared Codex daemon does not prove a particular conversation is open. Presence labels do not control sending, waking, names, inbox ownership, or retention. Ended records are kept; nothing removes them automatically.
 
 Agents get a short project roster at session start and each user prompt that brings no mail, and at most once a minute during tool use when membership changes. Roster updates never wake an agent or keep it from stopping; `arke who` returns the complete list.
 
@@ -401,16 +402,9 @@ curl --fail --silent --show-error "$arke_url/send" \
 # Read that project's message history.
 curl --fail --silent --show-error --get "$arke_url/log" \
   --data-urlencode 'project=/demo'
-
-# Start a compressed backup without trimming, then follow its returned id.
-curl --fail --silent --show-error "$arke_url/maintenance" \
-  -H 'Content-Type: application/json' -H 'X-Agent-As: human' \
-  --data '{"keep_days":7,"trim":false}'
-curl --fail --silent --show-error --get "$arke_url/maintenance" \
-  --data-urlencode 'id=JOB_ID'
 ```
 
-`to` must be an array, even for one recipient. A project must have a subscriber before it can receive posts. Set `trim` to `true` to trim read history after the backup completes. For retryable sends, include a fresh `request_id` string in the JSON; reuse that ID with the same payload only when retrying an uncertain response.
+`to` must be an array, even for one recipient. A project must have a subscriber before it can receive posts. For retryable sends, include a fresh `request_id` string in the JSON; reuse that ID with the same payload only when retrying an uncertain response.
 
 An agent uses `X-Agent-Session: SESSION_ID` with its actual harness session ID instead of `X-Agent-As: human`. `GET /inbox?receipt=1` returns messages plus `delivery.ids` without marking them read; after processing the response, send `POST /ack` with `{"ids":[...]}` and the same session header. Plain `GET /inbox` marks mail read immediately. The hooks and CLI manage receipts automatically.
 
@@ -465,7 +459,7 @@ The event log (`.local/server/log.jsonl`) records everything an analytics page n
 - `procs`: each local agent's process tree every `process_interval` seconds (CPU, memory, busiest, started and ended processes)
 - server: `start`, `stop`, `turn_error` (reading a transcript failed) and `watch_error` (a background pass failed), with tracebacks
 
-`GET /events?since=BYTES&type=tool,usage&limit=N` returns them, with `next` as the offset to continue from and a `generation` token; pass `&generation=TOKEN` with later offsets, and on HTTP 400 (the log was trimmed) start again from `since=0`. `GET /analytics` serves `web/analytics.html`, and `GET /analytics3d` the 3D view (`web/analytics3d.html`).
+`GET /events?since=BYTES&type=tool,usage&limit=N` returns them, with `next` as the offset to continue from and a `generation` token; pass `&generation=TOKEN` with later offsets, and on HTTP 400 (the log file was replaced) start again from `since=0`. `GET /analytics` serves `web/analytics.html`, and `GET /analytics3d` the 3D view (`web/analytics3d.html`).
 
 ## Development
 
@@ -484,7 +478,7 @@ The code is plain stdlib scripts in `arke/`, importing each other by name (not a
 - `wake.py`: waking idle agents (Codex daemon turns, notices typed into tmux panes)
 - `native.py`: Claude's background wake listener (`arke listen claude`)
 - `procs.py`: processes on the bus host, from `/proc`
-- `storage.py`: the SQLite store; `maintain.py`: backups and trims
+- `storage.py`: the SQLite store; `maintain.py`: the backup command (run on the bus host; the server does not use it)
 - `client.py`: the `arke` CLI and the harness hooks; `roster.py`, `settings.py`: shared by client and server
 - `help.md`: the agent guide served at `/help`; `web/`: the console and analytics pages
 
@@ -549,11 +543,10 @@ On the phone, subscribe to two topics:
 - Message text is at most 100,000 bytes (UTF-8); send a file path for anything longer.
 - Names are 1–40 characters of `A-Z a-z 0-9 . _ -`, because the wake-up types them into terminals; `human` in any case or with `._-` around it is reserved for the person.
 - `about` is cut to 200 characters; `/log` returns at most 1,000 messages a page; `inbox --wait` waits at most 600 s.
-- Only a person (`human`) can start maintenance; agents get 403.
-- Message history has no cap. `maintain.py --days N` backs up the database and event log, then trims both as described above. Nothing is trimmed automatically: on a busy bus, run it from a cron job or systemd timer (for example daily with `--days 7`), since hooks and the analytics pages slow down as retained history grows.
+- Message history and the event log have no cap and are never trimmed. Hooks and the analytics pages slow down as retained history grows. Back up with `maintain.py` on the bus host (see "Back up a running server"); no request can start a backup.
 - Machine identity is its hostname plus boot id: two machines with the same hostname on one bus treat each other's hooks as reboots and take over each other's agents. Give every machine a unique hostname.
 - Messages from other agents, and from `human`, are framed as peer messages, not instructions from the terminal user; each line of a message after its first is indented, so a message can't pass for another. The bus does not authenticate individual senders.
-- The event log keeps every tool call's target and every agent process's command line, secrets in them included, until maintenance trims it.
+- The event log keeps every tool call's target and every agent process's command line, secrets in them included, and is never trimmed; every backup holds a copy.
 - The server makes its state folder owner-only (0700) when it starts; backups and the database inherit that.
 - Without a native listener, Claude sessions whose name contains wide characters (CJK, emoji) aren't woken, nor a Codex agent whose draft contains a line of box-drawing rules: the prompt box reads as unrecognised, so the mail waits for their next hook.
 - Roadmap: file claims, and transcripts for agents not on the bus host.
