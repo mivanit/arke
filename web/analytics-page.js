@@ -38,7 +38,7 @@ async function readEvents(types, restarted) {
   const restart = why => { rotated = why; console.warn(why); raw.length = 0; next = 0; eventGeneration = ""; restarted?.(); };
   for (;;) {
     let r;
-    try { r = await api(`/events?since=${next}&type=${types}&limit=20000&generation=${encodeURIComponent(eventGeneration)}`); }
+    try { r = await api(`/events?since=${next}&type=${types}&limit=20000&procs=totals&generation=${encodeURIComponent(eventGeneration)}`); }
     catch (e) {
       // 400 on a nonzero cursor: the log was rotated or truncated under us, so the old offset will never be valid again.
       // Reread from the start and drop what we had, or every event would appear twice.
@@ -48,8 +48,8 @@ async function readEvents(types, restarted) {
     // the log went missing or was replaced by a shorter one (a 200 with an earlier next)
     if (r.next < next) { restart("event log was replaced: reloaded from the start"); continue; }
     eventGeneration = r.generation || eventGeneration;
-    // procs events carry big top/started/ended lists; keep only per-agent cpu/rss
-    for (const e of r.events) raw.push(e.event === "procs" ? { ts: e.ts, event: e.event, agents: Object.fromEntries(Object.entries(e.agents || {}).map(([n, v]) => [n, { cpu: v.cpu, rss_mb: v.rss_mb }])) } : e); got += r.events.length;
+    // procs=totals: the server cut procs events to each agent's cpu/rss (their process lists are most of the log)
+    for (const e of r.events) raw.push(e); got += r.events.length;
     const moved = r.next !== next; next = r.next;
     if (r.events.length < 20000 || !moved) break;
     $("status").textContent = `loading… ${raw.length} events`;

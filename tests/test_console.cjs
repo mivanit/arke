@@ -607,6 +607,14 @@ async function consoleUI() {
 }
 
 // Findings 14-16: run the real build()/load() in a vm against a scripted /events, for both pages.
+function analyticsCrossBeforeLoad() {
+  // Moving the pointer off a chart before the first load finished redrew the crosshair with no model: "M is null".
+  const html = read('analytics.html'), page = read('analytics-page.js'), at = page.indexOf('const winNow =');
+  const src = page.slice(at, page.indexOf('\n', at)) + '\n' + html.slice(html.indexOf('function drawCross()'), html.indexOf('let drag = null;'));
+  vm.runInNewContext(src + '; drawCross();', { M: null, win: null, range: 21600, hoverT: null, pinT: null, W: 600, document: { querySelectorAll: () => [] } });
+  console.log('ok: the 2D crosshair waits for the first load');
+}
+
 async function analyticsLoad() {
   for (const file of ['analytics.html', 'analytics3d.html']) {
     const html = read(file), ts = 1700000000;
@@ -2028,4 +2036,4 @@ async function demoSite() {
   console.log('ok: the static demo draws the console, both analytics pages and the 3D city from the fake bus, from a subpath');
 }
 
-(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); await demoSite(); })().catch(e => { console.error(e); process.exitCode = 1; });
+(async () => { await markdownIsInert(); await browserOriginIsolation(); await experimentalKeyAccess(); analyticsIdentity(); analyticsFileTargets(); await analyticsFiles(); await analyticsRoofRefresh(); await analyticsSizeRefresh(); await analyticsSizeBatching(); await analyticsHistoryRaces(); analyticsStressLayout(); analyticsCrossBeforeLoad(); await analyticsLoad(); await analyticsRecovery(); await analyticsMatrix(); await analyticsSingleAgentLayout(); await consoleUI(); await consoleHighlighting(); await consoleRaces(); await humanHistoryAndFileIdentity(); await analytics3dResilience(); analytics3dStablePlaces(); await analytics3dNotes(); await prefsFromLinks(); await connectionLight(); await analyticsWidthAfterEmpty(); await horatioOff(); await phoneWidth(); await composeKeys(); await consoleBadMarkdownAndMissingAgent(); await draftKeepsTo(); await draftKeepsDeliveryMode(); await boardPreviewAndGitHost(); await stackedTranscriptBounded(); await pagesKeepState(); await analyticsRefreshDuringBrush(); await demoSite(); })().catch(e => { console.error(e); process.exitCode = 1; });

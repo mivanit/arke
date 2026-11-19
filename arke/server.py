@@ -28,6 +28,7 @@ import argparse
 import collections
 import copy
 import fcntl
+import gzip
 import hashlib
 import hmac
 import ipaddress
@@ -3080,9 +3081,15 @@ def git_log(cwd: Path, since: float, limit: int) -> dict[str, Any]:
 
 
 def read_events(
-    since: int, types: set[str], limit: int, generation: str = ""
+    since: int,
+    types: set[str],
+    limit: int,
+    generation: str = "",
+    procs_totals: bool = False,
 ) -> dict[str, Any]:
-    """Raw event log from byte offset `since` (optionally only some event types). `next` is where to continue."""
+    """Raw event log from byte offset `since` (optionally only some event types). `next` is where to continue.
+    procs_totals: procs events keep only each agent's cpu and rss_mb (their top/started/ended lists are most of
+    the log's bytes, and the 2D page draws only the totals)."""
     if not LOG_FILE.exists():
         return {"events": [], "next": 0, "generation": "missing"}
     events: list[dict[str, Any]] = []
@@ -3115,6 +3122,19 @@ def read_events(
                 )
                 continue
             if not types or e.get("event") in types:
+                if procs_totals and e["event"] == "procs":
+                    agents: Any = e.get("agents")
+                    e = {
+                        "ts": e.get("ts"),
+                        "event": "procs",
+                        "agents": {
+                            name: {"cpu": v.get("cpu"), "rss_mb": v.get("rss_mb")}
+                            for name, v in agents.items()
+                            if isinstance(v, dict)
+                        }
+                        if isinstance(agents, dict)
+                        else {},
+                    }
                 events.append(e)
                 if len(events) >= limit:
                     break
@@ -3236,14 +3256,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store" if self.key else "no-cache")
-        self.send_header("Vary", "Origin, Sec-Fetch-Site")
+        self.send_header("Vary", "Origin, Sec-Fetch-Site, Accept-Encoding")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("X-Content-Type-Options", "nosniff")
         if ctype.startswith("text/html"):
             self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.send_header("X-Frame-Options", "DENY")
+        # Browsers always accept gzip; JSON shrinks ~10x. Level 1: a 30 MB events page compresses in well under a second.
+        if len(data) > 1024 and accepts_gzip(self.headers.get("Accept-Encoding", "")):
+            data = gzip.compress(data, compresslevel=1)
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
+        # The 30 s limit covers the whole send (Python 3.5+), so a big answer to a slow link was cut off and a
+        # browser read the truncated JSON as complete. Add 1 s per 100 kB: 30 MB gets 330 s.
+        if self.timeout is not None:
+            self.connection.settimeout(self.timeout + len(data) / 100_000)
         self.wfile.write(data)
 
     def route(self, method: str) -> None:
@@ -3423,11 +3451,14 @@ class Handler(BaseHTTPRequestHandler):
                 case "GET", ["filesizes"]:
                     out = bus.file_sizes(query.get("path", []))
                 case "GET", ["events"]:
+                    if q.get("procs", "") not in ("", "totals"):
+                        raise HttpError(400, "procs must be totals or absent")
                     out = read_events(
                         max(0, int(q.get("since", 0))),
                         set(filter(None, q.get("type", "").split(","))),
                         max(1, min(int(q.get("limit", 5000)), 50000)),
                         q.get("generation", ""),
+                        q.get("procs") == "totals",
                     )
                 case "POST", ["hook"]:
                     out = bus.hook(body)
@@ -3573,6 +3604,20 @@ class Handler(BaseHTTPRequestHandler):
             f"{ascii(getattr(self, 'path', self.requestline))[1:-1]} {code}",
             flush=True,
         )
+
+
+def accepts_gzip(header: str) -> bool:
+    """Whether an Accept-Encoding header allows gzip: listed, and not with q=0."""
+    for part in header.split(","):
+        name, _, params = part.partition(";")
+        if name.strip().lower() != "gzip":
+            continue
+        weight: str = params.strip()
+        try:
+            return not weight.startswith("q=") or float(weight[2:]) > 0
+        except ValueError:
+            return False  # a malformed weight: send it uncompressed, which every client can read
+    return False
 
 
 def browser_host(host: str) -> bool:

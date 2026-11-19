@@ -663,6 +663,7 @@ const scaleOf = svg => svg.dataset.scale === "all" ? [M.t0, M.t1] : winNow();
 const tAt = (svg, clientX) => { const r = svg.getBoundingClientRect(), [a, b] = scaleOf(svg); return a + (clientX - r.left) / r.width * (b - a); };
 let raf = 0;
 function drawCross() {
+  if (!M) return;  // the pointer can leave a chart before the first load finishes
   const [w0, w1] = winNow();
   for (const svg of document.querySelectorAll(".tsvg")) {
     const width = svg.clientWidth || W, [a, b] = scaleOf(svg);
