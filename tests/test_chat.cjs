@@ -124,7 +124,9 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       component.owner = true;
       component.render({ ...snapshot(records(401, 500)), queue: [{ id: 'held', text: 'Earlier task', status: 'held', origin: 'human' }] });
       const heldControls = !component.$('resume').hidden && component.$('queue').textContent.includes('Discard');
-      return { disjointReset, allRecovered, exhaustionPersisted, staleHistoryIgnored, staleWindowIgnored, heldControls, calls };
+      component.render({ ...snapshot(records(401, 500)), stopping: true, active: 'old-turn', paused: true });
+      const stoppingControls = component.$('resume').hidden && component.$('interrupt').disabled && component.$('status').textContent.includes('stopping');
+      return { disjointReset, allRecovered, exhaustionPersisted, staleHistoryIgnored, staleWindowIgnored, heldControls, stoppingControls, calls };
     });
     for (const [name, passed] of Object.entries(history)) if (name !== 'calls') assert.ok(passed, name);
     assert.ok(history.calls[0].endsWith('before=402'));

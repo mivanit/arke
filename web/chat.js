@@ -141,11 +141,11 @@ export class ArkeChat extends HTMLElement {
     this.snapshot = snapshot;
     this.$('name').textContent = snapshot.name;
     this.$('cwd').textContent = `${snapshot.harness} · ${snapshot.cwd} · shared files`;
-    this.$('status').textContent = snapshot.state + (snapshot.paused ? ' · queued messages are paused' : '');
+    this.$('status').textContent = snapshot.state + (snapshot.stopping ? ' · stopping' : '') + (snapshot.paused ? ' · queued messages are paused' : '');
     if (snapshot.error) this.$('error').textContent = snapshot.error;
-    this.$('interrupt').disabled = !snapshot.active;
+    this.$('interrupt').disabled = !snapshot.active || !!snapshot.stopping;
     const held = snapshot.queue.some(item => item.status === 'held');
-    this.$('resume').hidden = !this.owner || !(snapshot.paused || held) || !!snapshot.active;
+    this.$('resume').hidden = !this.owner || !(snapshot.paused || held) || !!snapshot.active || !!snapshot.stopping;
     this.$('preview').textContent = snapshot.preview;
     // Keep one continuous window. A new disjoint tail must replace the old
     // cache, otherwise backward pagination can never reach the missing middle.

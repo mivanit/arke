@@ -15,20 +15,22 @@ from pathlib import Path
 from typing import Any
 
 from .harnesses import Adapter, Launch, adapter
-from .runner import MAX_FRAME
-
-
-def emit(value: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(value) + "\n")
-    sys.stdout.flush()
+from .harnesses.events import READ_BATCH
+from .wire import MAX_FRAME, PipeWriter, encode_frame
 
 
 async def serve() -> None:
+    output = PipeWriter()
+    await asyncio.get_running_loop().connect_write_pipe(
+        lambda: output, sys.stdout.buffer
+    )
+    emit = output.send
     reader = asyncio.StreamReader(limit=MAX_FRAME)
     protocol = asyncio.StreamReaderProtocol(reader)
     await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
     native: Adapter | None = None
     turn: asyncio.Task[None] | None = None
+    turn_finished = True
     tasks: set[asyncio.Task[None]] = set()
     replies: dict[int, asyncio.Future[Any]] = {}
     sequence = 0
@@ -53,7 +55,7 @@ async def serve() -> None:
                 number = sequence
                 future = asyncio.get_running_loop().create_future()
                 replies[number] = future
-                emit(
+                await emit(
                     {
                         "bus_request": number,
                         "tool": message["tool"],
@@ -63,17 +65,18 @@ async def serve() -> None:
                 result = await future
                 response = {"result": result}
         except Exception as exc:  # noqa: BLE001 — forward failures across the worker boundary
-            response = {"error": str(exc)}
+            response = {"error": str(exc)[:8192]}
         finally:
             if number is not None:
                 replies.pop(number, None)
-        writer.write((json.dumps(response) + "\n").encode())
+        writer.write(encode_frame(response))
         with contextlib.suppress(ConnectionError):
             await writer.drain()
         writer.close()
         await writer.wait_closed()
 
     async def run(text: str) -> None:
+        nonlocal turn_finished
         assert native is not None
         try:
             terminal = None
@@ -81,17 +84,19 @@ async def serve() -> None:
                 if event.kind == "completed":
                     terminal = event
                 else:
-                    emit({"event": asdict(event)})
+                    await emit({"event": asdict(event)})
             if terminal is None:
                 raise ConnectionError("native stream ended without a turn result")
-            # Publish completion only after the native generator has finished its
-            # cleanup. A following run can then start immediately and safely.
-            emit({"event": asdict(terminal)})
+            # Native cleanup is finished. A following run may wait for the final
+            # output flush, but must never overlap the previous native iterator.
+            turn_finished = True
+            await emit({"event": asdict(terminal)})
         except Exception as exc:  # noqa: BLE001 — forward failures across the worker boundary
-            emit({"failure": str(exc)})
+            turn_finished = True
+            await emit({"failure": str(exc)[:8192]})
 
     async def dispatch(value: dict[str, Any]) -> None:
-        nonlocal native, turn, socket_server, closing
+        nonlocal native, turn, turn_finished, socket_server, closing
         try:
             method, params = value["method"], value["params"]
             result: Any = None
@@ -129,7 +134,10 @@ async def serve() -> None:
                 raise RuntimeError("worker has not opened")
             elif method == "run":
                 if turn is not None and not turn.done():
-                    raise RuntimeError("a turn is already running")
+                    if not turn_finished:
+                        raise RuntimeError("a turn is already running")
+                    await turn
+                turn_finished = False
                 turn = asyncio.create_task(run(params["text"]))
             elif method == "interrupt":
                 await native.interrupt()
@@ -149,12 +157,19 @@ async def serve() -> None:
                 native = None
             else:
                 raise ValueError("unknown worker operation")
-            emit({"id": value["id"], "result": result})
+            await emit({"id": value["id"], "result": result})
         except Exception as exc:  # noqa: BLE001 — forward failures across the worker boundary
-            emit({"id": value["id"], "error": str(exc)})
+            await emit({"id": value["id"], "error": str(exc)[:8192]})
 
+    batch = 0
     try:
         while line := await reader.readline():
+            if len(line) > MAX_FRAME:
+                raise ValueError("worker protocol message exceeds the frame limit")
+            batch += 1
+            if batch >= READ_BATCH:
+                batch = 0
+                await asyncio.sleep(0)
             value = json.loads(line)
             if "bus_reply" in value:
                 future = replies.get(value["bus_reply"])
@@ -176,8 +191,11 @@ async def serve() -> None:
         if turn is not None:
             turn.cancel()
         await asyncio.gather(*tasks, *([turn] if turn else []), return_exceptions=True)
-        if native is not None:
-            await native.close()
+        try:
+            if native is not None:
+                await native.close()
+        finally:
+            output.close()
 
 
 def main() -> None:

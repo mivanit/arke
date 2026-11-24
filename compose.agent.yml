@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile.agent
     init: true
+    # Allow HTTP drain and owned native cleanup before Docker kills the service.
+    stop_grace_period: 60s
     ports:
       - "127.0.0.1:7780:7780"
     volumes:

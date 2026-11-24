@@ -9,17 +9,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
+import inspect
 import json
 import logging
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from .harnesses import Adapter, Event, Launch, adapter
+from .harnesses import Adapter, Event, Launch
+from .harnesses.base import native_data_paths
+from .runner import Runner
 
 INTERRUPT_TIMEOUT = 30.0
 INTERRUPT_COMPLETION_TIMEOUT = 15.0
@@ -46,6 +49,7 @@ class Runtime:
     cleanup: asyncio.Task[None] | None = None
     turn_done: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
+    stopping: bool = False
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
     preview: str = ""
@@ -57,9 +61,15 @@ class Conversations:
         self,
         path: Path,
         profiles: dict[str, Launch],
-        factory: Callable[[Launch], Adapter] = adapter,
+        factory: Callable[[Launch], Adapter] = Runner,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.state_paths = (
+            path.resolve(),
+            path.with_suffix(".lock").resolve(),
+            Path(str(path) + "-wal").resolve(),
+            Path(str(path) + "-shm").resolve(),
+        )
         self._lock = path.with_suffix(".lock").open("a+")
         try:
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -81,7 +91,7 @@ class Conversations:
                     harness TEXT NOT NULL, cwd TEXT NOT NULL,
                     native_id TEXT, paused INTEGER NOT NULL, state TEXT NOT NULL,
                     error TEXT NOT NULL DEFAULT '', created REAL NOT NULL,
-                    runner TEXT NOT NULL DEFAULT 'local', native_home TEXT
+                    runner TEXT NOT NULL DEFAULT 'local', native_home TEXT, native_roots TEXT
                 );
                 CREATE TABLE IF NOT EXISTS requests (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL,
@@ -109,6 +119,10 @@ class Conversations:
                     self.db.execute(
                         "ALTER TABLE conversations ADD COLUMN native_home TEXT"
                     )
+                if "native_roots" not in columns:
+                    self.db.execute(
+                        "ALTER TABLE conversations ADD COLUMN native_roots TEXT"
+                    )
                 self.db.execute(
                     "UPDATE requests SET status='uncertain' WHERE status IN ('starting', 'running')"
                 )
@@ -120,8 +134,8 @@ class Conversations:
             raise
         self.profiles = profiles
         self.factory = factory
-        self.prepare_launch: Callable[[str, Launch], Launch] = lambda cid, launch: (
-            launch
+        self.prepare_launch: Callable[[str, Launch], Launch | Awaitable[Launch]] = (
+            lambda cid, launch: launch
         )
         self.runtime: dict[str, Runtime] = {}
         self.closed = False
@@ -171,8 +185,8 @@ class Conversations:
         cid = uuid.uuid4().hex
         launch = self.profiles[profile]
         self.db.execute(
-            "INSERT INTO conversations (id,name,profile,harness,cwd,native_id,paused,state,error,created,runner,native_home) "
-            "VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', '', ?, ?, ?)",
+            "INSERT INTO conversations (id,name,profile,harness,cwd,native_id,paused,state,error,created,runner,native_home,native_roots) "
+            "VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', '', ?, ?, ?, ?)",
             (
                 cid,
                 name or profile,
@@ -184,6 +198,7 @@ class Conversations:
                 str(launch.native_home.resolve())
                 if launch.native_home is not None
                 else None,
+                json.dumps([str(path.resolve()) for path in native_data_paths(launch)]),
             ),
         )
         return cid
@@ -217,7 +232,12 @@ class Conversations:
 
     @staticmethod
     def _matches_launch(row: dict[str, Any], launch: Launch) -> bool:
-        return (row["harness"], row["cwd"], row["runner"], row["native_home"]) == (
+        same_binding = (
+            row["harness"],
+            row["cwd"],
+            row["runner"],
+            row["native_home"],
+        ) == (
             launch.harness,
             str(launch.cwd.resolve()),
             launch.runner,
@@ -225,6 +245,14 @@ class Conversations:
             if launch.native_home is not None
             else None,
         )
+
+        if not same_binding:
+            return False
+        # Old rows did not record environment-selected native roots. Preserve the
+        # known binding without inventing historical locations during migration.
+        return row["native_roots"] is None or json.loads(row["native_roots"]) == [
+            str(path.resolve()) for path in native_data_paths(launch)
+        ]
 
     def _launch(self, row: dict[str, Any]) -> Launch:
         launch = self.profiles.get(row["profile"])
@@ -258,6 +286,7 @@ class Conversations:
         row.pop("native_id")
         row.pop("runner")
         row.pop("native_home")
+        row.pop("native_roots")
         rt = self._rt(cid)
         launch = self.profiles.get(row["profile"])
         return row | {
@@ -269,6 +298,7 @@ class Conversations:
             is not None,
             "profile_available": launch is not None,
             "active": rt.active,
+            "stopping": rt.stopping,
             "revision": f"{rt.generation}:{rt.revision}",
             "preview": rt.preview,
             "approvals": [
@@ -321,9 +351,13 @@ class Conversations:
             if (old["text"], old["mode"], old["origin"]) != (text, mode, origin):
                 raise Conflict("request ID was already used for different content")
             return {"id": request_id, "status": old["status"]}
-        rt = self._rt(cid)
+        rt = self._preflight(cid)
         if redirect and (
-            not target or target != rt.active or rt.redirect or rt.interrupting
+            not target
+            or target != rt.active
+            or rt.redirect
+            or rt.interrupting
+            or rt.stopping
         ):
             raise Conflict(
                 "the targeted turn is no longer active or is already being interrupted"
@@ -346,16 +380,28 @@ class Conversations:
                 "INSERT INTO requests(conversation,id,text,mode,origin,status,created) VALUES (?,?,?,?,?,'queued',?)",
                 (cid, request_id, text, mode, origin, time.time()),
             )
-        if redirect:
-            rt.redirect = request_id
-            if rt.started:
-                self._schedule_interrupt(cid)
-        self._change(cid)
-        self._ensure_worker(cid)
-        rt.wake.set()
+        # The commit above is the acceptance boundary. A later scheduling
+        # failure must not turn this durable request into a definite rejection.
+        try:
+            if redirect:
+                rt.redirect = request_id
+                if rt.started:
+                    self._schedule_interrupt(cid)
+            self._ensure_worker(cid)
+            rt.wake.set()
+            self._change(cid)
+        except Exception as exc:  # noqa: BLE001 — retain accepted requests when execution scheduling fails
+            rt.redirect = None
+            self._change(
+                cid,
+                paused=1,
+                state="paused",
+                error=f"Message accepted, but execution could not be scheduled: {exc}",
+            )
         return {"id": request_id, "status": "queued"}
 
-    def _ensure_worker(self, cid: str) -> None:
+    def _preflight(self, cid: str) -> Runtime:
+        """Known rejection checks must run before changing durable request state."""
         rt = self._rt(cid)
         if (
             rt.cleanup is not None
@@ -365,15 +411,58 @@ class Conversations:
             raise Conflict(
                 "native cleanup failed; inspect execution before restarting the service"
             )
-        if rt.task is None or rt.task.done():
+        return rt
+
+    def _ensure_worker(self, cid: str) -> None:
+        rt = self._rt(cid)
+        if rt.stopping:
+            # The retiring task still owns this runtime. Accepted input remains
+            # paused; only explicit Resume after retirement may start it again.
+            return
+        if rt.task is None:
             rt.closing = False
-            rt.task = asyncio.create_task(self._worker(cid))
+            rt.cleanup = None
+            coroutine = self._worker(cid)
+            try:
+                task = asyncio.create_task(coroutine)
+            except BaseException:
+                coroutine.close()
+                raise
+            rt.task = task
+            task.add_done_callback(lambda done: self._worker_finished(cid, done))
+
+    def _worker_finished(self, cid: str, task: asyncio.Task[None]) -> None:
+        """Publish readiness only after this actor has relinquished ownership."""
+        rt = self.runtime[cid]
+        if rt.task is not task:
+            return
+        if not task.cancelled():
+            task.exception()  # retrieve failures; cleanup below determines restart safety
+        if rt.cleanup is not None and (
+            not rt.cleanup.done()
+            or rt.cleanup.cancelled()
+            or rt.cleanup.exception() is not None
+        ):
+            # Retain the failed execution's ownership and error for inspection.
+            rt.stopping = True
+            self._change(cid)
+            return
+        rt.task = None
+        rt.stopping = False
+        rt.active = None
+        rt.approvals.clear()
+        rt.redirect = None
+        rt.started = False
+        rt.turn_done.set()
+        self._change(cid, state="paused" if self._row(cid)["paused"] else "idle")
 
     def resume(self, cid: str) -> None:
         if self.closed:
             raise Conflict("manager is stopping")
         self._launch(self._row(cid))
-        rt = self._rt(cid)
+        rt = self._preflight(cid)
+        if rt.stopping:
+            raise Conflict("execution is still stopping; wait for cleanup to finish")
         if rt.active or rt.interrupting:
             raise Conflict("wait for the active turn to finish")
         if self.db.execute(
@@ -433,7 +522,13 @@ class Conversations:
             return
         rt.interrupting = True
         self._change(cid, state="interrupting")
-        rt.control = asyncio.create_task(self._interrupt(cid))
+        coroutine = self._interrupt(cid)
+        try:
+            rt.control = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            rt.interrupting = False
+            raise
 
     async def _interrupt(self, cid: str) -> None:
         rt = self._rt(cid)
@@ -467,6 +562,8 @@ class Conversations:
             or approval["request"] != rt.active
             or rt.adapter is None
             or rt.interrupting
+            or rt.stopping
+            or self.closed
         ):
             raise Conflict("this approval is no longer pending")
         # Remove before awaiting native I/O: duplicate clicks cannot approve twice.
@@ -513,7 +610,17 @@ class Conversations:
                 self._change(cid, state="starting", error="")
                 launch = self._launch(row)
                 if rt.adapter is None:
-                    rt.adapter = self.factory(self.prepare_launch(cid, launch))
+                    prepared = self.prepare_launch(cid, launch)
+                    launch = (
+                        await prepared if inspect.isawaitable(prepared) else prepared
+                    )
+                    launch = replace(
+                        launch,
+                        protected_paths=tuple(
+                            dict.fromkeys((*launch.protected_paths, *self.state_paths))
+                        ),
+                    )
+                    rt.adapter = self.factory(launch)
                     native_id = await rt.adapter.open(row["native_id"])
                     self._change(cid, native_id=native_id)
                 self._record(
@@ -592,6 +699,8 @@ class Conversations:
         except Exception as exc:  # noqa: BLE001 — preserve uncertain native outcomes, never replay
             self._uncertain(cid, str(exc))
         finally:
+            rt.stopping = True
+            self._change(cid)
             rt.cleanup = asyncio.create_task(self._cleanup(cid))
             try:
                 await asyncio.shield(rt.cleanup)
@@ -644,12 +753,8 @@ class Conversations:
                 )
                 raise
         rt.adapter = None
-        rt.active = None
-        rt.approvals.clear()
-        rt.redirect = None
-        rt.started = False
-        rt.turn_done.set()
-        self._change(cid)
+        # The actor is still awaiting this cleanup task. Its done callback owns
+        # clearing active state and publishing readiness for a replacement.
 
     def _uncertain(self, cid: str, error: str) -> None:
         rt = self._rt(cid)

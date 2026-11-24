@@ -30,6 +30,7 @@ from .base import (
     native_reference,
     subscription_environment,
 )
+from .events import READ_BATCH, EventBuffer, EventOverflow, event_buffer
 
 
 class Claude:
@@ -37,32 +38,34 @@ class Claude:
         self.launch = launch
         self.client: ClaudeSDKClient | None = None
         self.requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self.events: asyncio.Queue[Event | Exception] = asyncio.Queue()
+        self.events: EventBuffer[Event] = event_buffer()
         self.receiver: asyncio.Task[None] | None = None
 
     async def _permission(
         self, name: str, inputs: dict[str, Any], context: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
+        if self.events.failure is not None:
+            return PermissionResultDeny(message="Native event delivery failed")
         request_id = uuid.uuid4().hex
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
         self.requests[request_id] = future
-        self.events.put_nowait(
-            Event(
-                "approval",
-                {
-                    "request_id": request_id,
-                    "kind": "input" if name == "AskUserQuestion" else "permission",
-                    "details": {
-                        "tool": name,
-                        "input": inputs,
-                        "questions": inputs.get("questions", []),
-                    },
-                },
-            )
-        )
         try:
+            self.events.put_nowait(
+                Event(
+                    "approval",
+                    {
+                        "request_id": request_id,
+                        "kind": "input" if name == "AskUserQuestion" else "permission",
+                        "details": {
+                            "tool": name,
+                            "input": inputs,
+                            "questions": inputs.get("questions", []),
+                        },
+                    },
+                )
+            )
             answer = await future
             if name == "AskUserQuestion":
                 answers = answer.get("answers", {})
@@ -78,6 +81,10 @@ class Claude:
             elif answer.get("allow") is True:
                 return PermissionResultAllow(updated_input=inputs)
             return PermissionResultDeny(message="Denied by the owner")
+        except EventOverflow:
+            return PermissionResultDeny(
+                message="Native event delivery exceeded its limit"
+            )
         finally:
             self.requests.pop(request_id, None)
             self.events.put_nowait(
@@ -144,8 +151,13 @@ class Claude:
 
     async def _receive(self) -> None:
         assert self.client is not None
+        batch = 0
         try:
             async for message in self.client.receive_response():
+                batch += 1
+                if batch >= READ_BATCH:
+                    batch = 0
+                    await asyncio.sleep(0)
                 if isinstance(message, SystemMessage) and message.subtype == "init":
                     self.events.put_nowait(
                         Event(
@@ -205,10 +217,12 @@ class Claude:
                 ConnectionError("Claude disconnected before a result")
             )
         except Exception as exc:  # noqa: BLE001 — forward reader failures to the turn owner
-            self.events.put_nowait(exc)
+            self.events.fail(exc)
 
     async def run(self, text: str) -> AsyncIterator[Event]:
         assert self.client is not None
+        if self.events.failure is not None:
+            raise self.events.failure
         await self.client.query(text)
         yield Event("started")
         self.receiver = asyncio.create_task(self._receive())
@@ -235,6 +249,8 @@ class Claude:
                 future.set_result({"allow": False})
 
     async def respond(self, request_id: str, answer: dict[str, Any]) -> None:
+        if self.events.failure is not None:
+            raise self.events.failure
         future = self.requests.get(request_id)
         if future is None or future.done():
             raise ValueError("approval is no longer pending")

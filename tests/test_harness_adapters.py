@@ -244,3 +244,14 @@ def test_codex_accepts_native_default_chatgpt_backend() -> None:
             "chatgpt_base_url": "https://chatgpt.com/backend-api/",
         }
     )
+
+
+def test_raw_adapter_refuses_container_execution_settings(tmp_path: Path) -> None:
+    from arke.harnesses import adapter
+
+    with pytest.raises(ValueError, match="Runner"):
+        adapter(
+            Launch(
+                "codex", tmp_path, runner="container", native_home=tmp_path / "native"
+            )
+        )

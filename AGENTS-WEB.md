@@ -37,9 +37,12 @@ application-provided MCP tools. Only startup configuration supplies executable p
 arguments, native resume references, and tool definitions. The browser selects a named profile.
 Agents have fresh conversations but share files when their profiles use the same directory.
 Arke never creates Git worktrees. A saved conversation cannot be resumed under a different
-harness or working directory; create a fresh conversation instead. Container profiles also
-select a trusted worker image and an existing dedicated `native_home`. Mount only directories
-whose entire contents the agent is permitted to access, including any sockets inside them.
+harness, working directory, runner, or recorded native storage location; create a fresh
+conversation instead. Container profiles also select a trusted worker image and an existing
+dedicated `native_home`. The `native_home` setting is rejected for local profiles: local CLIs
+use their normal native configuration and environment-selected locations. Mount only
+directories whose entire contents the agent is permitted to access, including any sockets
+inside them.
 
 The adapters require subscription authentication. Billing override environment variables are
 rejected, and effective native authentication is checked before a prompt is submitted. Claude
@@ -60,19 +63,41 @@ configure a distinct `chat_key_file`. Everyone using that chat key sees one conv
 Chat users can send and redirect messages; only the owner can create private agents, release
 held messages or recovery pauses, resolve uncertain outcomes, and approve tools.
 
-The first startup with sharing enabled creates a fresh conversation and stores its shared
-identity. Restart reopens that exact conversation. An existing private conversation is never
-selected just because its profile matches. If that profile already has private conversations,
-startup refuses sharing; configure a fresh shared profile and dedicated native home. The shared
-profile and native home are reserved for the shared conversation; use a separate profile/home
-for private conversations.
+Startup validates the proposed sharing configuration before creating a fresh conversation
+and storing its shared identity. Restart reopens that exact conversation. An existing private
+conversation is never selected just because its profile matches. If that profile already has
+private activity, startup refuses sharing; configure a fresh shared profile and dedicated native
+home. The shared profile and native home are reserved for the shared conversation; use a
+separate profile/home for private conversations. A rejected configuration can be corrected
+using the same database, preserving private conversations.
+
+An older version could leave an unused shared binding after rejecting setup. With the service
+stopped, its owner can remove only that empty binding:
+
+```bash
+uv run --locked --all-extras python -m arke.repair_sharing .local/shared-state/conversations.sqlite3
+```
+
+The command takes the normal database lock and refuses a binding with any requests, history,
+or native session reference. It preserves private conversations and cannot reset an established
+shared conversation. Do not remove the state directory to repair sharing.
 
 Shared general-purpose agents require `runner = "container"`. The web/session service stays
 on the host and launches an isolated worker. Only the selected workspace and dedicated native
-home are mounted into it. Startup rejects mounts that overlap Arke's private state or
-configured control files. The worker receives scoped commands and events, not the owner key,
-private history, or Docker socket. The same container must not hold both the shared worker
-and Arke's administration state. See the setup below.
+home are mounted into it. Both mounts are checked against Arke's private state, configured
+control files, other profiles' native storage, and recorded private storage for removed or
+renamed profiles. The checks also protect the current owner's native data locations, including
+`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and their defaults. They run at startup and again before
+launch; changing a saved path or retargeting a symlink does not silently change the binding.
+The worker receives scoped commands and events, not the owner key or Docker socket. The same
+container must not hold both the shared worker and Arke's administration state. See the setup
+below.
+
+New conversations record their effective native storage roots. Legacy rows retain unknown
+historical roots rather than guessing from the current environment. Current defaults and
+known private locations are protected, but Arke cannot discover an older custom location that
+was never recorded. Include such private paths in `WebConfig.protected_paths` when embedding,
+and keep them outside selected shared mounts.
 
 This boundary protects Arke administration and other conversations. The native CLI needs its
 subscription login, so tools inside its worker may read credentials in that worker's native
@@ -91,8 +116,14 @@ must configure trusted proxy handling explicitly; do not broadly trust forwarded
 
 ## Queue and recovery behavior
 
-* Ordinary messages are committed to SQLite and wait until the current turn ends. The SDK does
-  not receive future queued turns in advance.
+* Committing a message to SQLite is the acceptance boundary. Known rejection checks happen
+  first. If execution cannot be scheduled after acceptance, the request stays queued and
+  paused with an error; retrying its ID returns that saved request. A definite rejection does
+  not leave newly queued work behind. The SDK does not receive future queued turns in advance.
+* Cleanup is visible as a stopping phase. Resume remains unavailable until the old worker has
+  actually exited successfully. Ordinary messages submitted during cleanup can be accepted
+  into the paused queue; they do not release the recovery pause. Failed cleanup retains
+  ownership and requires inspection before restart.
 * Interrupt-and-redirect targets the active request visible to that browser. The redirect runs
   only after the previous native response ends. Older queued messages become **held** until the
   owner resumes or discards them. Messages submitted afterward can run behind the redirect;
@@ -119,14 +150,21 @@ required. Arke records the conversation activity it observes; it does not import
 pre-existing native sessions into the browser. History is paginated, and event streams start
 with a snapshot so reconnects do not depend on retaining every token event.
 
+Output buffers have byte and record limits. Adjacent preview-text updates can be combined;
+final messages, approvals, tool activity, session references, and completion keep their order.
+A genuinely excessive backlog fails explicitly and pauses for recovery. Approval and interrupt
+replies do not wait for the event consumer to make room. A reader failure is reported without
+silently dropping an already accepted history record.
+
 ## Full dashboard and agent bus
 
 Set `[web] dashboard = true` and optionally `bus_config` to an existing bus configuration file.
 Stop the old bus process before starting the combined app; both honor the same bus state lock.
 The dashboard uses the existing bus database and request dispatch code, retaining receipt and
 terminal wake-up behavior. An explicit `bus_config` owns that instance's database, logs,
-watcher settings, and transcript roots; another imported bus configuration cannot replace it. Its **agents** link opens the reusable conversation interface, and
-managed agents in the roster link directly to their conversations.
+watcher settings, and transcript roots; another imported bus configuration cannot replace it.
+Its **agents** link opens the reusable conversation interface, and managed agents in the roster
+link directly to their conversations.
 
 The combined dashboard requires the owner key for private bus routes, or the bus's configured
 experimental shared key. Existing hook clients therefore need a matching `client.key_file` and
@@ -136,10 +174,27 @@ Managed agents receive four stdio MCP tools: `arke_list`, `arke_send`, `arke_inb
 The worker forwards those calls over its existing connection to a capability scoped to its
 own mailbox/tools. It does not need a localhost callback URL or the dashboard owner key.
 Registration completes before its first tool call. Incoming mail queues a fixed instruction
-to check the inbox; a full queue keeps mail pending without blocking other agents or startup. The actual message content enters through
-tool output, preserving its origin as external data. Reading returns delivery IDs; the agent
-acknowledges them explicitly after consuming the tool result. A failed turn does not trigger
-an automatic continuation or repeated mailbox wake-up.
+to check the inbox; a full queue keeps mail pending without blocking other agents or startup.
+The actual message content enters through tool output, preserving its origin as external data.
+
+Managed inbox reads return bounded batches of complete messages, with delivery IDs covering
+exactly those messages. The limits include encoded transport and tool-result overhead. After
+consuming a batch, the agent acknowledges those IDs and, when `more` is true, reads the next
+batch within the same turn. Individually oversized records are reported separately, remain
+unread, and are omitted from delivery IDs. The agent should report them to the owner rather
+than repeatedly poll. Existing standalone CLI inbox behavior is unchanged.
+
+Remaining pages do not cause the backend to start another model turn. If a turn ends before
+all mail is consumed, unread mail stays pending until an explicit request or genuinely new
+mail arrives. A failed turn does not trigger an automatic continuation or repeated mailbox
+wake-up.
+
+Blocking bus operations run outside the web event loop and remain tracked even if their
+requester disconnects. Long polls have separate capacity from short tool operations. Shutdown
+stops new submissions and mailbox scheduling, wakes waiting requests, stops workers, and waits
+for accepted operations and watcher threads before closing the bus database. Cancellation does
+not undo an already committed message; retry it with the same request ID. If work cannot stop
+within its deadline, shutdown reports failure and retains database ownership.
 
 Manually started terminal agents still use the existing hooks and tmux support. Managed
 agents do not need dummy tmux windows. This release does not rearrange existing tmux sessions.
@@ -175,6 +230,20 @@ Configuration and approval rights stay with the host application. When construct
 `WebConfig` directly, include private control-file paths in `protected_paths` so container
 mount validation can reject overlaps with them.
 
+The standalone command limits HTTP request draining to five seconds before service cleanup.
+This prevents a browser event stream from holding shutdown open indefinitely. An embedding
+server must also set a finite drain deadline: the child application cannot deliver its own
+shutdown while the parent server is still waiting for an open response. For Uvicorn:
+
+```python
+import uvicorn
+
+uvicorn.run(app, workers=1, timeout_graceful_shutdown=5, proxy_headers=False)
+```
+
+The HTTP drain deadline is separate from worker and database cleanup deadlines. Allow the
+hosting process enough total shutdown time to complete those stages.
+
 The browser component is a standard custom element. For the mounted example:
 
 ```javascript
@@ -192,6 +261,9 @@ The host's request function supplies authentication and returns parsed JSON norm
 streaming `Response` when `options.stream` is true. The supplied standalone HTML shell assumes
 an origin-root deployment; the API and component support the prefix supplied by the host.
 For a non-web application, use `Conversations` directly and call `close()` on shutdown.
+Its default execution factory is the same owned `Runner` used by the web app, so
+container profiles also work outside HTTP. The low-level `harnesses.adapter()`
+factory accepts local execution only; it cannot silently bypass a container profile.
 
 ## Containers
 

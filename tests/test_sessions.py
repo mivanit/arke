@@ -587,3 +587,217 @@ def test_legacy_execution_binding_migrates_without_adopting_current_profile(
             await manager.close()
 
     asyncio.run(scenario())
+
+
+def test_known_cleanup_failure_rejects_before_saving_or_holding_input(
+    tmp_path: Path,
+) -> None:
+    class FailedClose(FakeAdapter):
+        async def close(self) -> None:
+            raise RuntimeError("fixture cleanup failure")
+
+    async def scenario() -> None:
+        fake = FailedClose(Launch("codex", tmp_path))
+        manager = Conversations(
+            tmp_path / "state.db", {"code": fake.launch}, lambda _: fake
+        )
+        cid = manager.create("code")
+        manager.submit(cid, "first", "first")
+        manager.submit(cid, "older", "older")
+        await until(lambda: bool(fake.sent))
+        fake.events.put_nowait(ConnectionError("fixture native error"))
+        rt = manager._rt(cid)
+        await until(lambda: rt.task is not None and rt.task.done())
+        try:
+            before = manager.snapshot(cid)["queue"]
+            with pytest.raises(Conflict, match="cleanup failed"):
+                manager.submit(cid, "rejected", "must not be saved")
+            with pytest.raises(Conflict, match="cleanup failed"):
+                manager.submit(
+                    cid,
+                    "rejected-redirect",
+                    "must not hold older",
+                    redirect=True,
+                    target="first",
+                )
+            assert manager.snapshot(cid)["queue"] == before
+            assert not manager.db.execute(
+                "SELECT 1 FROM requests WHERE id LIKE 'rejected%'"
+            ).fetchone()
+            # An earlier accepted request remains idempotently queryable even
+            # though this execution cannot accept additional input.
+            assert manager.submit(cid, "older", "older")["status"] == "queued"
+            with pytest.raises(RuntimeError, match="fixture cleanup failure"):
+                await manager.close()
+        finally:
+            manager.db.close()
+            manager._lock.close()
+
+    asyncio.run(scenario())
+
+
+def test_failure_after_commit_preserves_accepted_request_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        fake = FakeAdapter(Launch("codex", tmp_path))
+        manager = Conversations(
+            tmp_path / "state.db", {"code": fake.launch}, lambda _: fake
+        )
+        cid = manager.create("code")
+        schedule = manager._ensure_worker
+
+        def unavailable(cid: str) -> None:
+            raise RuntimeError("fixture scheduler unavailable")
+
+        try:
+            monkeypatch.setattr(manager, "_ensure_worker", unavailable)
+            assert manager.submit(cid, "accepted", "hello") == {
+                "id": "accepted",
+                "status": "queued",
+            }
+            assert manager.snapshot(cid)["paused"]
+            assert "Message accepted" in manager.snapshot(cid)["error"]
+            assert manager.submit(cid, "accepted", "hello")["status"] == "queued"
+            assert (
+                manager.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 1
+            )
+            monkeypatch.setattr(manager, "_ensure_worker", schedule)
+            manager.resume(cid)
+            await until(lambda: fake.sent == ["hello"])
+            fake.finish()
+            await until(lambda: manager.snapshot(cid)["active"] is None)
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_worker_retirement_owns_readiness_and_ignores_stale_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        first = FakeAdapter(Launch("codex", tmp_path))
+        second = FakeAdapter(first.launch)
+        adapters = iter([first, second])
+        manager = Conversations(
+            tmp_path / "state.db", {"code": first.launch}, lambda _: next(adapters)
+        )
+        cid = manager.create("code")
+        finished: list[asyncio.Task[None]] = []
+        retire = manager._worker_finished
+        monkeypatch.setattr(
+            manager, "_worker_finished", lambda cid, task: finished.append(task)
+        )
+        try:
+            manager.submit(cid, "first", "first")
+            await until(lambda: first.sent == ["first"])
+            first.events.put_nowait(ConnectionError("fixture native error"))
+            await until(lambda: bool(finished))
+            old_task = finished[0]
+            assert old_task.done() and first.closed
+            assert manager.snapshot(cid)["stopping"]
+            manager.resolve(cid, "first")
+            with pytest.raises(Conflict, match="still stopping"):
+                manager.resume(cid)
+            assert manager.snapshot(cid)["paused"]
+            # Ordinary input is durably accepted during cleanup, but cannot
+            # accidentally release the recovery pause or acquire a second actor.
+            assert manager.submit(cid, "second", "second")["status"] == "queued"
+            assert manager._rt(cid).task is old_task and not second.sent
+            monkeypatch.setattr(manager, "_worker_finished", retire)
+            retire(cid, old_task)
+            assert not manager.snapshot(cid)["stopping"]
+            assert manager.snapshot(cid)["active"] is None
+            manager.resume(cid)
+            replacement = manager._rt(cid).task
+            assert replacement is not None and replacement is not old_task
+            retire(cid, old_task)
+            assert manager._rt(cid).task is replacement
+            await until(lambda: second.sent == ["second"])
+            second.finish()
+            await until(lambda: manager.snapshot(cid)["active"] is None)
+        finally:
+            monkeypatch.setattr(manager, "_worker_finished", retire)
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_effective_local_native_roots_are_recorded_and_cannot_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    async def scenario() -> None:
+        original = tmp_path / "native-a"
+        monkeypatch.setenv("CODEX_HOME", str(original))
+        launch = Launch("codex", tmp_path)
+        manager = Conversations(tmp_path / "state.db", {"code": launch})
+        cid = manager.create("code")
+        assert json.loads(manager._row(cid)["native_roots"]) == [str(original)]
+        assert "native_roots" not in manager.snapshot(cid)
+        await manager.close()
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "native-b"))
+        manager = Conversations(tmp_path / "state.db", {"code": launch})
+        try:
+            with pytest.raises(ValueError, match="binding changed"):
+                manager.resume(cid)
+            assert manager.snapshot(cid)["paused"]
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_launch_preparation_finishes_before_native_open(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        fake = FakeAdapter(Launch("codex", tmp_path))
+        manager = Conversations(
+            tmp_path / "state.db", {"code": fake.launch}, lambda _: fake
+        )
+        cid = manager.create("code")
+        preparing, release = asyncio.Event(), asyncio.Event()
+
+        async def prepare(cid: str, launch: Launch) -> Launch:
+            preparing.set()
+            await release.wait()
+            return launch
+
+        manager.prepare_launch = prepare
+        try:
+            manager.submit(cid, "first", "first")
+            await preparing.wait()
+            assert not fake.opened and not fake.sent
+            release.set()
+            await until(lambda: fake.sent == ["first"])
+            fake.finish()
+            await until(lambda: manager.snapshot(cid)["active"] is None)
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_standalone_manager_uses_container_runner_and_protects_its_database(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        workspace, home = tmp_path / "workspace", tmp_path / "native"
+        workspace.mkdir()
+        home.mkdir()
+        manager = Conversations(
+            workspace / "state.sqlite3",
+            {"home": Launch("codex", workspace, runner="container", native_home=home)},
+        )
+        cid = manager.create("home")
+        try:
+            manager.submit(cid, "one", "must never launch on the host")
+            await until(lambda: bool(manager.snapshot(cid)["error"]))
+            assert "overlaps private service state" in manager.snapshot(cid)["error"]
+            assert manager.snapshot(cid)["queue"][0]["status"] == "queued"
+            assert not manager.history(cid)
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())

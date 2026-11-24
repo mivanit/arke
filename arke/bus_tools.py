@@ -59,7 +59,7 @@ def main() -> None:
 
     @server.tool()
     def arke_inbox() -> Any:
-        """Read external agent messages. After consuming them, acknowledge the returned delivery IDs."""
+        """Read one batch of external messages. Acknowledge exactly its delivery IDs after consuming it. If more is true, read the next batch within this turn. Report oversized IDs to the owner; do not repeatedly poll them."""
         return call("inbox", {})
 
     @server.tool()

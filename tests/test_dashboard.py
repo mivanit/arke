@@ -144,7 +144,7 @@ def test_full_queue_does_not_block_startup_or_other_agent_mail(tmp_path: Path) -
         manager._change(second, paused=1)
         dashboard = Dashboard(config(tmp_path, bus_config=config_file), manager)
         try:
-            dashboard.sync_agents()
+            await dashboard.sync_agents()
             for n in range(100):
                 manager.submit(first, str(n), "waiting")
             for cid in (first, second):
@@ -157,10 +157,10 @@ def test_full_queue_does_not_block_startup_or_other_agent_mail(tmp_path: Path) -
             assert dashboard.bus.agents["managed-" + second]["inbox"]
             # An agent created after startup has working tools before the next poll.
             third = manager.create("code")
-            launch = dashboard.prepare_launch(third, manager.profiles["code"])
+            launch = await dashboard.prepare_launch(third, manager.profiles["code"])
             assert launch.bus_call is not None
-            launch.bus_call("list", {})
-            inbox = launch.bus_call("inbox", {})
+            await launch.bus_call("list", {})
+            inbox = await launch.bus_call("inbox", {})
             assert inbox["delivery"]["ids"] == []
         finally:
             dashboard.stop_event.set()
@@ -202,5 +202,121 @@ def test_dashboard_constructor_failure_releases_lock(
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_bus_request_is_drained_before_database_close(tmp_path: Path) -> None:
+    import asyncio
+    import threading
+
+    from arke.bus_execution import BusBusy
+    from arke.dashboard import Dashboard
+    from arke.harnesses import Launch
+    from arke.sessions import Conversations
+
+    config_file = tmp_path / "bus.toml"
+    config_file.write_text(f'[server]\nstate_dir = "{tmp_path / "bus"}"\n')
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "conversations.db",
+            {"code": Launch("codex", tmp_path)},
+            FakeAdapter,
+        )
+        dashboard = Dashboard(config(tmp_path, bus_config=config_file), manager)
+        entered, release = threading.Event(), threading.Event()
+        committed = []
+
+        def delayed_write() -> None:
+            entered.set()
+            assert release.wait(3)
+            with dashboard.bus.change():
+                dashboard.bus.colors["fixture"] = "#ffffff"
+                dashboard.bus.save()
+                committed.append(
+                    dashboard.bus.store.db.execute("SELECT 1").fetchone()[0]
+                )
+
+        request = asyncio.create_task(dashboard.execution.call(delayed_write))
+        try:
+            async with asyncio.timeout(2):
+                while not entered.is_set():
+                    await asyncio.sleep(0.001)
+            # The blocked bus operation must not prevent event-loop control work.
+            await asyncio.wait_for(asyncio.sleep(0), 0.1)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            dashboard.begin_shutdown()
+            shutdown = asyncio.create_task(dashboard.stop())
+            await asyncio.sleep(0.02)
+            assert not shutdown.done() and not dashboard.lock.closed
+            with pytest.raises(BusBusy, match="stopping"):
+                await dashboard.execution.call(lambda: None)
+            release.set()
+            await asyncio.wait_for(shutdown, 2)
+            assert committed == [1] and dashboard.lock.closed
+        finally:
+            release.set()
+            await manager.close()
+            await dashboard.stop()
+
+    asyncio.run(scenario())
+
+
+def test_long_polls_have_separate_capacity_and_shutdown_wakes_them(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    from arke.bus_execution import BusBusy
+    from arke.dashboard import Dashboard
+    from arke.harnesses import Launch
+    from arke.sessions import Conversations
+
+    config_file = tmp_path / "bus.toml"
+    config_file.write_text(f'[server]\nstate_dir = "{tmp_path / "bus"}"\n')
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "conversations.db",
+            {"code": Launch("codex", tmp_path)},
+            FakeAdapter,
+        )
+        dashboard = Dashboard(config(tmp_path, bus_config=config_file), manager)
+        cid = manager.create("code")
+        await dashboard.prepare_launch(cid, manager.profiles["code"])
+        agent = dashboard.bus.agents["managed-" + cid]
+        pending = [
+            asyncio.create_task(
+                dashboard.execution.call(
+                    dashboard.bus.inbox, agent, 600, True, long_poll=True
+                )
+            )
+            for _ in range(8)
+        ]
+        try:
+            async with asyncio.timeout(2):
+                while len(dashboard.execution.pending[1]) != 8:
+                    await asyncio.sleep(0.001)
+            with pytest.raises(BusBusy, match="busy"):
+                await dashboard.execution.call(lambda: None, long_poll=True)
+            # Tools still have execution capacity while every long-poll slot waits.
+            assert (await dashboard.call_tool(cid, "inbox", {}))["messages"] == []
+            dashboard.begin_shutdown()
+            results = await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), 2
+            )
+            assert all(
+                isinstance(result, dashboard.server.HttpError) and result.status == 503
+                for result in results
+            )
+            await dashboard.stop()
+        finally:
+            dashboard.begin_shutdown()
+            await asyncio.gather(*pending, return_exceptions=True)
+            await manager.close()
+            await dashboard.stop()
 
     asyncio.run(scenario())

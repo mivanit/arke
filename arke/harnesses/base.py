@@ -36,6 +36,35 @@ class Launch:
     bus_call: Callable[[str, dict[str, Any]], Any] | None = field(
         default=None, repr=False, compare=False
     )
+    protected_paths: tuple[Path, ...] = field(default=(), repr=False, compare=False)
+
+
+def native_data_paths(launch: Launch) -> tuple[Path, ...]:
+    """Resolve the native storage this launch actually uses, for saved bindings.
+
+    Older conversations did not record environment-selected native roots. Never
+    populate those historical records by guessing from today's environment.
+    """
+    if launch.runner == "container":
+        if launch.native_home is None:
+            raise ValueError("container profiles need a dedicated native_home")
+        return (launch.native_home.resolve(),)
+    if launch.native_home is not None:
+        raise ValueError("native_home is supported only for container profiles")
+    home = Path.home().resolve()
+    name, default = (
+        ("CODEX_HOME", home / ".codex")
+        if launch.harness == "codex"
+        else ("CLAUDE_CONFIG_DIR", home / ".claude")
+    )
+    path = Path(os.environ.get(name) or default).expanduser()
+    if not path.is_absolute():
+        path = launch.cwd / path
+    roots = (path.resolve(),)
+    # Claude's account/settings file can live beside the default data directory.
+    if launch.harness == "claude":
+        roots += ((home / ".claude.json").resolve(),)
+    return roots
 
 
 @dataclass

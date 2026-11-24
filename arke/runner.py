@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import os
 import signal
@@ -18,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from .harnesses import Event, Launch
+from .harnesses.base import native_data_paths
+from .harnesses.events import READ_BATCH, EventBuffer, event_buffer
+from .wire import MAX_FRAME, encode_frame
 
-MAX_FRAME = 2 * 1024 * 1024
 WORKER_CLOSE_TIMEOUT = 22
 
 
@@ -57,7 +60,8 @@ class Runner:
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
-        self.events: asyncio.Queue[Event | Exception] = asyncio.Queue(maxsize=64)
+        self.events: EventBuffer[Event] = event_buffer()
+        self.failure: Exception | None = None
         self.callbacks: set[asyncio.Task[None]] = set()
         self.sequence = 0
         self.container: str | None = None
@@ -65,10 +69,11 @@ class Runner:
 
     def command(self) -> list[str]:
         if self.launch.runner == "local":
+            native_data_paths(self.launch)
             return [sys.executable, "-m", "arke.worker"]
         if self.launch.runner != "container":
             raise ValueError("runner must be local or container")
-        validate_isolation(self.launch, ())
+        validate_isolation(self.launch, self.launch.protected_paths)
         assert self.launch.native_home is not None
         self.container = "arke-worker-" + uuid.uuid4().hex
         return [
@@ -112,10 +117,14 @@ class Runner:
     async def _write(self, value: dict[str, Any]) -> None:
         if self.process is None or self.process.stdin is None:
             raise ConnectionError("worker is not running")
-        self.process.stdin.write((json.dumps(value) + "\n").encode())
+        self.process.stdin.write(encode_frame(value))
         await self.process.stdin.drain()
 
     async def _call(self, method: str, params: dict[str, Any]) -> Any:
+        if self.failure is not None:
+            raise self.failure
+        if method != "close" and self.events.failure is not None:
+            raise self.events.failure
         self.sequence += 1
         number = self.sequence
         future = asyncio.get_running_loop().create_future()
@@ -130,20 +139,32 @@ class Runner:
         try:
             if self.launch.bus_call is None:
                 raise ValueError("this worker has no bus capability")
-            # Bus operations commit synchronously. Do not detach them into
-            # cancellable to_thread tasks that could outlive the bus database.
+            # Dashboard owns any underlying thread operation through shutdown.
             result = self.launch.bus_call(message["tool"], message["data"])
+            if inspect.isawaitable(result):
+                result = await result
             reply = {"result": result}
         except Exception as exc:  # noqa: BLE001 — forward failures across the worker boundary
             reply = {"error": str(exc)}
+        try:
+            encode_frame({"bus_reply": message["bus_request"], **reply})
+        except ValueError:
+            reply = {"error": "bus result exceeds the worker protocol limit"}
         with contextlib.suppress(ConnectionError, BrokenPipeError):
             await self._write({"bus_reply": message["bus_request"], **reply})
 
     async def _read(self) -> None:
         assert self.process is not None and self.process.stdout is not None
         failure: Exception = ConnectionError("native worker disconnected")
+        batch = 0
         try:
             while line := await self.process.stdout.readline():
+                if len(line) > MAX_FRAME:
+                    raise ValueError("worker protocol message exceeds the frame limit")
+                batch += 1
+                if batch >= READ_BATCH:
+                    batch = 0
+                    await asyncio.sleep(0)
                 value = json.loads(line)
                 if "event" in value:
                     self.events.put_nowait(Event(**value["event"]))
@@ -172,12 +193,11 @@ class Runner:
         except Exception as exc:  # noqa: BLE001 — forward failures across the worker boundary
             failure = exc
         finally:
+            self.failure = failure
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(failure)
-            if self.events.full():
-                self.events.get_nowait()
-            self.events.put_nowait(failure)
+            self.events.fail(failure)
 
     async def open(self, native_id: str | None) -> str | None:
         self.process = await asyncio.create_subprocess_exec(
@@ -208,6 +228,8 @@ class Runner:
             )
 
     async def run(self, text: str) -> AsyncIterator[Event]:
+        if self.events.failure is not None:
+            raise self.events.failure
         await self._call("run", {"text": text})
         while True:
             event = await self.events.get()

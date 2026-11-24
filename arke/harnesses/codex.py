@@ -15,6 +15,7 @@ from .base import (
     native_reference,
     subscription_environment,
 )
+from .events import READ_BATCH, EventBuffer, native_buffer
 
 
 def subscription_config(config: dict[str, Any]) -> None:
@@ -54,7 +55,8 @@ class Codex:
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
         self.requests: dict[str, tuple[Any, str, dict[str, Any]]] = {}
-        self.events: asyncio.Queue[dict[str, Any] | Exception] = asyncio.Queue()
+        self.events: EventBuffer[dict[str, Any]] = native_buffer()
+        self.failure: Exception | None = None
         self.sequence = 0
         self.thread = ""
         self.turn = ""
@@ -66,6 +68,8 @@ class Codex:
         await self.process.stdin.drain()
 
     async def _call(self, method: str, params: dict[str, Any]) -> Any:
+        if self.failure is not None:
+            raise self.failure
         self.sequence += 1
         number = self.sequence
         future = asyncio.get_running_loop().create_future()
@@ -79,8 +83,13 @@ class Codex:
     async def _read(self) -> None:
         assert self.process is not None and self.process.stdout is not None
         failure: Exception = ConnectionError("Codex app-server disconnected")
+        batch = 0
         try:
             while line := await self.process.stdout.readline():
+                batch += 1
+                if batch >= READ_BATCH:
+                    batch = 0
+                    await asyncio.sleep(0)
                 message = json.loads(line)
                 if "method" not in message:
                     future = self.pending.get(message.get("id"))
@@ -103,10 +112,11 @@ class Codex:
         except Exception as exc:  # noqa: BLE001 — forward reader failures to the turn owner
             failure = exc
         finally:
+            self.failure = failure
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(failure)
-            self.events.put_nowait(failure)
+            self.events.fail(failure)
 
     async def open(self, native_id: str | None) -> str:
         native_reference(native_id)
@@ -280,6 +290,8 @@ class Codex:
         )
 
     async def respond(self, request_id: str, answer: dict[str, Any]) -> None:
+        if self.failure is not None:
+            raise self.failure
         request = self.requests.get(request_id)
         if request is None:
             raise ValueError("approval is no longer pending")

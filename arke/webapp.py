@@ -8,16 +8,23 @@ import hmac
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .harnesses import Adapter, Launch
+from .harnesses.base import native_data_paths
 from .runner import Runner, validate_isolation
 from .sessions import Conflict, Conversations
 from .webconfig import WebConfig, load
+
+if TYPE_CHECKING:
+    from uvicorn import Config
+
+HTTP_DRAIN_TIMEOUT = 5
 
 
 def assets() -> Path:
@@ -25,37 +32,68 @@ def assets() -> Path:
     return installed if installed.is_dir() else Path(__file__).parent.parent / "web"
 
 
+def shared_protected_paths(
+    config: WebConfig,
+    manager: Conversations,
+    shared: str | None,
+    protected: tuple[Path, ...],
+) -> tuple[Path, ...]:
+    """Inventory known private native storage, including retired launch profiles."""
+    paths = list(protected)
+    # Also protect the current owner's native stores used by terminal agents.
+    for harness in ("claude", "codex"):
+        paths.extend(native_data_paths(Launch(harness, Path.cwd())))
+    for name, profile in config.profiles.items():
+        if name != config.shared_profile:
+            paths.extend(native_data_paths(profile))
+    for old in manager.db.execute(
+        "SELECT id,profile,runner,native_home,native_roots FROM conversations c "
+        "WHERE (native_id IS NOT NULL OR EXISTS (SELECT 1 FROM requests r WHERE r.conversation=c.id))"
+    ):
+        if old["id"] == shared:
+            continue
+        if old["profile"] == config.shared_profile:
+            raise ValueError(
+                "this profile has private native history; use a fresh shared profile and dedicated native_home"
+            )
+        if old["native_roots"] is not None:
+            paths.extend(Path(value) for value in json.loads(old["native_roots"]))
+        elif old["native_home"]:
+            paths.append(Path(old["native_home"]))
+        # Legacy local records never captured historical environment overrides.
+        # Current native roots are protected above; do not invent past locations.
+    return tuple(dict.fromkeys(path.resolve() for path in paths))
+
+
 @asynccontextmanager
 async def service_lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    """Own a conversation service once, including when mounted by a parent app.
+    """Own the service once. Mounting hosts explicitly enter this context.
 
-    Embedders enter this context from the parent's lifespan; ASGI mount does not
-    forward lifespan events. Standalone applications enter it automatically.
+    The HTTP server must bound its request drain before entering this shutdown;
+    a child ASGI lifespan cannot stop a parent waiting forever on open streams.
     """
     if getattr(app.state, "service_running", False):
         raise RuntimeError("conversation service already has a lifetime owner")
     config: WebConfig = app.state.config
-    protected = (config.state, *config.protected_paths)
-    if config.chat_key:
-        if not config.shared_profile or config.chat_key == config.owner_key:
-            raise ValueError(
-                "chat access needs a shared profile and distinct credential"
-            )
-        validate_isolation(config.profiles[config.shared_profile], protected)
-        shared_home = config.profiles[config.shared_profile].native_home
-        assert shared_home is not None
-        for name, launch in config.profiles.items():
-            if name != config.shared_profile and launch.native_home is not None:
-                other = launch.native_home.resolve()
-                if other.is_relative_to(
-                    shared_home.resolve()
-                ) or shared_home.resolve().is_relative_to(other):
-                    raise ValueError(
-                        "shared native_home must be exclusive to the shared profile"
-                    )
+    if config.chat_key and (
+        not config.shared_profile or config.chat_key == config.owner_key
+    ):
+        raise ValueError("chat access needs a shared profile and distinct credential")
+    shared_launch = (
+        config.profiles.get(config.shared_profile) if config.shared_profile else None
+    )
+    if config.chat_key and shared_launch is None:
+        raise ValueError("shared_profile must name a configured profile")
     for launch in config.profiles.values():
-        if launch.runner == "container":
-            validate_isolation(launch, protected)
+        if launch.runner not in ("local", "container"):
+            raise ValueError("runner must be local or container")
+        native_data_paths(launch)  # reject unused/misleading execution configuration
+    if config.chat_key:
+        assert shared_launch is not None
+        validate_isolation(
+            shared_launch,
+            (config.state, *config.protected_paths),
+        )
     manager = Conversations(
         config.state / "conversations.sqlite3", config.profiles, app.state.factory
     )
@@ -64,45 +102,58 @@ async def service_lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.shared = None
     app.state.dashboard = None
     try:
+        protected = (config.state, *config.protected_paths)
+        if config.dashboard:
+            from .dashboard import Dashboard
+
+            # Acquire resources and resolve private bus paths, but start no
+            # background work until sharing and mount validation have succeeded.
+            app.state.dashboard = Dashboard(config, manager)
+            protected += app.state.dashboard.protected_paths
+        old_shared = manager.db.execute(
+            "SELECT value FROM metadata WHERE key='shared_conversation'"
+        ).fetchone()
+        proposed_shared = old_shared[0] if old_shared else None
+
+        def validate_launch(launch: Launch) -> Launch:
+            paths = protected
+            if config.chat_key and launch is shared_launch:
+                paths = shared_protected_paths(
+                    config, manager, app.state.shared or proposed_shared, paths
+                )
+            if launch.runner == "container":
+                try:
+                    validate_isolation(launch, paths)
+                except ValueError as exc:
+                    if config.chat_key and launch is shared_launch:
+                        raise ValueError(
+                            f"shared mounts must be exclusive of private native history and service state: {exc}"
+                        ) from exc
+                    raise
+            return replace(launch, protected_paths=paths)
+
+        # Validate before get_or_create_shared commits its new identity. Invalid
+        # configuration can then be corrected without abandoning the database.
+        for launch in config.profiles.values():
+            validate_launch(launch)
         if config.shared_profile:
             app.state.shared = manager.get_or_create_shared(
                 config.shared_profile, config.title
             )
-            if config.chat_key:
-                shared_home = config.profiles[config.shared_profile].native_home
-                assert shared_home is not None
-                for old in manager.db.execute(
-                    "SELECT profile,native_home FROM conversations c WHERE id<>? AND "
-                    "(native_id IS NOT NULL OR EXISTS (SELECT 1 FROM requests r WHERE r.conversation=c.id))",
-                    (app.state.shared,),
-                ):
-                    old_home = (
-                        Path(old["native_home"]).resolve()
-                        if old["native_home"]
-                        else None
-                    )
-                    if old["profile"] == config.shared_profile or (
-                        old_home is not None
-                        and (
-                            old_home.is_relative_to(shared_home.resolve())
-                            or shared_home.resolve().is_relative_to(old_home)
-                        )
-                    ):
-                        raise ValueError(
-                            "this profile has private native history; use a fresh shared profile and dedicated native_home"
-                        )
-        if config.dashboard:
-            from .dashboard import Dashboard
 
-            app.state.dashboard = Dashboard(config, manager)
-            for launch in config.profiles.values():
-                if launch.runner == "container":
-                    validate_isolation(launch, app.state.dashboard.protected_paths)
+        async def prepare_launch(cid: str, launch: Launch) -> Launch:
+            checked = validate_launch(launch)
+            if app.state.dashboard:
+                checked = await app.state.dashboard.prepare_launch(cid, checked)
+            return checked
+
+        manager.prepare_launch = prepare_launch
+        if app.state.dashboard:
             await app.state.dashboard.start()
         yield
     finally:
         if app.state.dashboard:
-            app.state.dashboard.stop_event.set()
+            app.state.dashboard.begin_shutdown()
         try:
             await manager.close()
         finally:
@@ -368,23 +419,30 @@ def create_app(
     return app
 
 
+def server_config(config: WebConfig, app: FastAPI | None = None) -> Config:
+    """Standalone serving policy; embedding hosts must also bound HTTP drain."""
+    from uvicorn import Config
+
+    return Config(
+        app if app is not None else create_app(config),
+        host=config.host,
+        port=config.port,
+        workers=1,
+        proxy_headers=False,
+        timeout_graceful_shutdown=HTTP_DRAIN_TIMEOUT,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a standalone agent interface or the Arke dashboard"
     )
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
-    config = load(args.config)
-    import uvicorn
+    from uvicorn import Server
 
-    # Multiple server workers must never race to own the same native conversation.
-    uvicorn.run(
-        create_app(config),
-        host=config.host,
-        port=config.port,
-        workers=1,
-        proxy_headers=False,
-    )
+    # Multiple workers must never race to own the same native conversation.
+    Server(server_config(load(args.config))).run()
 
 
 if __name__ == "__main__":

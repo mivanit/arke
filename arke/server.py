@@ -385,9 +385,16 @@ def candidates(body: dict[str, Any]) -> list[str]:
     return out
 
 
+if __package__:
+    from .managed_mail import mailbox_page
+else:
+    from managed_mail import mailbox_page
+
+
 class Bus:
     def __init__(self, state_file: Path, config: BusConfig | None = None) -> None:
         self._config = config
+        self.closing = threading.Event()
         self.state_file: Path = state_file.with_suffix(".sqlite3")
         self.store: Store = Store(self.state_file)
         self.cond: threading.Condition = (
@@ -435,6 +442,16 @@ class Bus:
                 f"loaded {len(self.agents)} agents, {len(self.messages)} messages",
                 flush=True,
             )
+
+    def begin_shutdown(self) -> None:
+        """Wake long polls without waiting for a busy operation's bus lock."""
+        self.closing.set()
+        if self.cond.acquire(blocking=False):
+            try:
+                self.cond.notify_all()
+            finally:
+                self.cond.release()
+        # If the lock is busy, wait loops also recheck the flag on a short bound.
 
     @property
     def config(self) -> BusConfig:
@@ -1675,6 +1692,8 @@ class Bus:
         deadline: float = time.time() + min(wait, MAX_WAIT_S)
         with self.cond:
             while True:
+                if self.closing.is_set():
+                    raise HttpError(503, "the bus is stopping")
                 if self.agents.get(a["sid"]) is not a:
                     raise HttpError(
                         409,
@@ -1685,7 +1704,7 @@ class Bus:
                     or time.time() >= deadline
                 ):
                     break
-                self.cond.wait(max(0.0, deadline - time.time()))
+                self.cond.wait(min(0.25, max(0.0, deadline - time.time())))
             ids: set[int] = {
                 item[0] for item in a["inbox"] if item[1] == "notify" or item[2]
             }  # board posts: `arke log`
@@ -1710,6 +1729,21 @@ class Bus:
             a["inbox"] = [item for item in a["inbox"] if item[0] not in ids]
             self.save()
         return messages
+
+    def managed_inbox(self, a: Agent) -> dict[str, Any]:
+        """Read a bounded receipt-bearing page without acknowledging unread mail."""
+        with self.cond:
+            if self.closing.is_set():
+                raise HttpError(503, "the bus is stopping")
+            if self.agents.get(a["sid"]) is not a:
+                raise HttpError(409, "this session was superseded")
+            ids = sorted(
+                {item[0] for item in a["inbox"] if item[1] == "notify" or item[2]}
+            )
+            return mailbox_page(
+                a["sid"],
+                (message for mid in ids if (message := self.message(mid)) is not None),
+            )
 
     def acknowledge(
         self, sid: str, as_name: str, body: dict[str, Any], tmux: str = ""
@@ -1830,6 +1864,8 @@ class Bus:
             self.cond.notify_all()
             try:
                 while True:
+                    if self.closing.is_set():
+                        raise HttpError(503, "the bus is stopping")
                     if self.wake_waiters.get(
                         sid
                     ) is not request or not self.listener_current(a, token):
@@ -1859,7 +1895,7 @@ class Bus:
                     if remaining <= 0:
                         return {"status": "timeout"}
                     self.cond.wait(
-                        remaining
+                        min(remaining, 0.25)
                     )  # never wait inside change(): it releases the lock
             finally:
                 if self.wake_waiters.get(sid) is request:
