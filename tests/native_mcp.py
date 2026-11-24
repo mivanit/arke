@@ -115,17 +115,20 @@ async def worker(model_url: str) -> None:
                     )
                     text += f"{key}={encoded}\n"
             (home / "config.toml").write_text(text)
-            self.process = await asyncio.create_subprocess_exec(
-                "codex",
-                "app-server",
-                "--listen",
-                "stdio://",
-                cwd=self.launch.cwd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                limit=8 * 1024 * 1024,
-            )
+            # Keep native startup errors in this synthetic workspace. A missing
+            # MCP tool otherwise reports only a later scripted-model failure.
+            with (self.launch.cwd / "codex-stderr.log").open("wb") as stderr:
+                self.process = await asyncio.create_subprocess_exec(
+                    "codex",
+                    "app-server",
+                    "--listen",
+                    "stdio://",
+                    cwd=self.launch.cwd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=stderr,
+                    limit=8 * 1024 * 1024,
+                )
             self.reader = asyncio.create_task(self._read())
             await self._call(
                 "initialize", {"clientInfo": {"name": "arke-ci", "version": "1"}}
@@ -249,6 +252,11 @@ async def check(root: Path, harness: str) -> None:
             assert len(replies) == 1, "native MCP reply did not reach the bus"
             assert replies[0]["from"] == agent["name"], replies
     except BaseException:
+        stderr = workspace / "codex-stderr.log"
+        if stderr.exists():
+            with stderr.open("rb") as log:
+                log.seek(max(0, stderr.stat().st_size - 16384))
+                print(log.read().decode(errors="replace"), file=sys.stderr)
         print(model.diagnostics(), file=sys.stderr)
         raise
     finally:
