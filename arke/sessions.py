@@ -667,7 +667,14 @@ class Conversations:
         if self._close_task is None:
             self.closed = True
             self._close_task = asyncio.create_task(self._close())
-        await asyncio.shield(self._close_task)
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            # The enclosing service must not close its bus while native workers
+            # are still shutting down. Finish owned cleanup before cancellation
+            # is allowed to unwind into the next resource's finally block.
+            await asyncio.shield(self._close_task)
+            raise
 
     async def _close(self) -> None:
         tasks = []

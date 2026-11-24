@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import socket
+import struct
 import sys
-import tempfile
+import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -30,7 +33,6 @@ async def serve() -> None:
     replies: dict[int, asyncio.Future[Any]] = {}
     sequence = 0
     socket_server: asyncio.Server | None = None
-    socket_dir: tempfile.TemporaryDirectory[str] | None = None
     closing = False
 
     async def bus_connection(
@@ -39,6 +41,12 @@ async def serve() -> None:
         nonlocal sequence
         number = None
         try:
+            peer = writer.get_extra_info("socket")
+            _, uid, _ = struct.unpack(
+                "3i", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            )
+            if uid != os.getuid():
+                raise PermissionError("bus socket belongs to another execution user")
             async with asyncio.timeout(30):
                 message = json.loads(await stream.readline())
                 sequence += 1
@@ -83,7 +91,7 @@ async def serve() -> None:
             emit({"failure": str(exc)})
 
     async def dispatch(value: dict[str, Any]) -> None:
-        nonlocal native, turn, socket_server, socket_dir, closing
+        nonlocal native, turn, socket_server, closing
         try:
             method, params = value["method"], value["params"]
             result: Any = None
@@ -96,10 +104,9 @@ async def serve() -> None:
                     **(params["launch"] | {"cwd": Path(params["launch"]["cwd"])})
                 )
                 if params.get("bus"):
-                    socket_dir = tempfile.TemporaryDirectory(prefix="arke-bus-")
-                    socket_path = str(Path(socket_dir.name) / "bus.sock")
+                    socket_path = "@arke-bus-" + uuid.uuid4().hex
                     socket_server = await asyncio.start_unix_server(
-                        bus_connection, path=socket_path, limit=MAX_FRAME
+                        bus_connection, path="\0" + socket_path[1:], limit=MAX_FRAME
                     )
                     if "arke" in launch.mcp_servers:
                         raise ValueError(
@@ -164,8 +171,6 @@ async def serve() -> None:
         if socket_server is not None:
             socket_server.close()
             await socket_server.wait_closed()
-        if socket_dir is not None:
-            socket_dir.cleanup()
         for task in tasks:
             task.cancel()
         if turn is not None:

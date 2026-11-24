@@ -23,7 +23,11 @@ def main() -> None:
         if socket_path:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(30)
-                connection.connect(socket_path)
+                connection.connect(
+                    "\0" + socket_path[1:]
+                    if socket_path.startswith("@")
+                    else socket_path
+                )
                 connection.sendall(
                     (json.dumps({"tool": tool, "data": data}) + "\n").encode()
                 )

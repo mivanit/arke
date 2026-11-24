@@ -84,10 +84,42 @@ def test_enabling_shared_access_refuses_prior_private_native_history(
         cid = client.post(
             "/api/conversations", headers=OWNER, json={"profile": "code"}
         ).json()["id"]
-        with app.state.conversations.db:
-            app.state.conversations.db.execute(
-                "UPDATE conversations SET native_id='private-native' WHERE id=?", (cid,)
-            )
+        assert client.portal is not None
+        client.portal.call(
+            lambda: app.state.conversations._change(cid, native_id="private-native")
+        )
+    with (
+        pytest.raises(ValueError, match="private native history"),
+        TestClient(create_app(config(tmp_path), FakeAdapter)),
+    ):
+        pass
+
+
+@pytest.mark.parametrize("native_reference_known", [True, False])
+def test_retired_profile_cannot_hide_private_native_home(
+    tmp_path: Path, native_reference_known: bool
+) -> None:
+    settings = config(tmp_path, shared_profile=None, chat_key="")
+    settings = replace(settings, profiles={"retired": settings.profiles["code"]})
+    app = create_app(settings, FakeAdapter)
+    with TestClient(app) as client:
+        cid = client.post(
+            "/api/conversations", headers=OWNER, json={"profile": "retired"}
+        ).json()["id"]
+
+        def mark_used() -> None:
+            manager = app.state.conversations
+            if native_reference_known:
+                manager._change(cid, native_id="private-native")
+            else:
+                # A prior attempt may have no saved native reference. Conservatively
+                # require a fresh home rather than guessing whether native history exists.
+                manager._change(cid, paused=1)
+                manager.submit(cid, "private", "private queued input")
+
+        assert client.portal is not None
+        client.portal.call(mark_used)
+    # The retired profile is absent from current config; its recorded home is not.
     with (
         pytest.raises(ValueError, match="private native history"),
         TestClient(create_app(config(tmp_path), FakeAdapter)),

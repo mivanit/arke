@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -392,6 +392,7 @@ def test_cancelled_close_caller_does_not_abandon_cleanup(tmp_path: Path) -> None
         closing.cancel()
         with pytest.raises(asyncio.CancelledError):
             await closing
+        assert fake.closed, "caller cancellation must wait for owned cleanup"
         await manager.close()
         await manager.close()
         assert fake.closed
@@ -434,6 +435,8 @@ def test_shutdown_cancels_open_and_releases_database(
 
 
 def test_claude_cancelled_consumer_cancels_receiver(tmp_path: Path) -> None:
+    from claude_agent_sdk import ClaudeSDKClient
+
     from arke.harnesses.claude import Claude
 
     class Client:
@@ -446,7 +449,7 @@ def test_claude_cancelled_consumer_cancels_receiver(tmp_path: Path) -> None:
 
     async def scenario() -> None:
         native = Claude(Launch("claude", tmp_path))
-        native.client = Client()  # type: ignore[invalid-assignment]
+        native.client = cast(ClaudeSDKClient, Client())
 
         async def consume() -> None:
             async for _ in native.run("hello"):

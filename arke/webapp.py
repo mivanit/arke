@@ -68,16 +68,29 @@ async def service_lifespan(app: FastAPI) -> AsyncGenerator[None]:
             app.state.shared = manager.get_or_create_shared(
                 config.shared_profile, config.title
             )
-            if (
-                config.chat_key
-                and manager.db.execute(
-                    "SELECT 1 FROM conversations WHERE profile=? AND id<>? AND native_id IS NOT NULL",
-                    (config.shared_profile, app.state.shared),
-                ).fetchone()
-            ):
-                raise ValueError(
-                    "this profile has private native history; use a fresh shared profile and dedicated native_home"
-                )
+            if config.chat_key:
+                shared_home = config.profiles[config.shared_profile].native_home
+                assert shared_home is not None
+                for old in manager.db.execute(
+                    "SELECT profile,native_home FROM conversations c WHERE id<>? AND "
+                    "(native_id IS NOT NULL OR EXISTS (SELECT 1 FROM requests r WHERE r.conversation=c.id))",
+                    (app.state.shared,),
+                ):
+                    old_home = (
+                        Path(old["native_home"]).resolve()
+                        if old["native_home"]
+                        else None
+                    )
+                    if old["profile"] == config.shared_profile or (
+                        old_home is not None
+                        and (
+                            old_home.is_relative_to(shared_home.resolve())
+                            or shared_home.resolve().is_relative_to(old_home)
+                        )
+                    ):
+                        raise ValueError(
+                            "this profile has private native history; use a fresh shared profile and dedicated native_home"
+                        )
         if config.dashboard:
             from .dashboard import Dashboard
 

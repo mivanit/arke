@@ -159,10 +159,12 @@ from arke.webconfig import load
 
 child = create_app(load(Path("shared.agent.example.toml")))
 
+
 @asynccontextmanager
 async def lifespan(app):
     async with service_lifespan(child):
         yield
+
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/agent", child)
@@ -233,6 +235,11 @@ setup above for shared access. A remote worker scheduler is not implemented.
 `make check` installs the optional extras from the lockfile and runs formatting, type checks,
 Python tests, and browser tests. Native protocol fixtures and fake adapters exercise ordering,
 interruption, authorization, receipts, and recovery without model calls or credentials.
+
+`python -m tests.native_contract --thread` checks the installed CLI versions, Codex
+initialization, effective subscription configuration, and local thread creation in a fresh
+repo-local home. It submits no model turn and does not use the owner's login. This checks
+protocol compatibility; it does not establish subscription access or model behavior.
 
 An explicit subscription smoke check is separate:
 

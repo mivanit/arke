@@ -232,3 +232,15 @@ def test_codex_rejects_effective_provider_overrides(overrides: dict[str, Any]) -
         subscription_config(
             {"model_provider": "openai", "forced_login_method": "chatgpt"} | overrides
         )
+
+
+def test_codex_accepts_native_default_chatgpt_backend() -> None:
+    from arke.harnesses.codex import subscription_config
+
+    subscription_config(
+        {
+            "model_provider": "openai",
+            "forced_login_method": "chatgpt",
+            "chatgpt_base_url": "https://chatgpt.com/backend-api/",
+        }
+    )

@@ -245,8 +245,12 @@ class Runner:
             # our owned worker. Orphaned descendants are reaped by the OS/init.
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.process.pid, signal.SIGKILL)
-            await self.process.wait()
             removal_error = None
+            try:
+                async with asyncio.timeout(2):
+                    await self.process.wait()
+            except TimeoutError:
+                removal_error = RuntimeError("could not confirm worker process exit")
             if self.container:
                 cleanup = await asyncio.create_subprocess_exec(
                     "docker",

@@ -75,8 +75,9 @@ def test_worker_subscription_protocol_control_and_resume(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("same_user", [True, False])
 def test_worker_forwards_only_injected_bus_callback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_user: bool
 ) -> None:
     clear_billing(monkeypatch)
     monkeypatch.setenv("TMPDIR", str(tmp_path))
@@ -91,12 +92,28 @@ def test_worker_forwards_only_injected_bus_callback(
         setting = next(arg for arg in sys.argv if arg.startswith("mcp_servers.arke.env="))
         socket_path = tomllib.loads("env=" + setting.split("=", 1)[1])["env"]["ARKE_MANAGED_SOCKET"]
         with socket.socket(socket.AF_UNIX) as connection:
-            connection.connect(socket_path)
+            connection.connect("\\0" + socket_path[1:])
             connection.sendall(json.dumps({"tool": "inbox", "data": {}}).encode() + b"\\n")
             response = json.loads(connection.makefile("rb").readline())
         assert response == {"result": {"message": "scoped mailbox fixture"}}, response
 """,
     )
+    if not same_user:
+        source = source.replace(
+            '{"result": {"message": "scoped mailbox fixture"}}',
+            '{"error": "bus socket belongs to another execution user"}',
+        )
+
+    class DifferentUser(Runner):
+        def command(self) -> list[str]:
+            # Real SO_PEERCRED remains untouched. Simulate a different worker
+            # owner without requiring root or changing the test process's UID.
+            return [
+                sys.executable,
+                "-c",
+                "from arke import worker; worker.os.getuid = lambda: -1; worker.main()",
+            ]
+
     path = executable(tmp_path, "codex", source)
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -105,13 +122,14 @@ def test_worker_forwards_only_injected_bus_callback(
         return {"message": "scoped mailbox fixture"}
 
     async def scenario() -> None:
-        runner = Runner(
+        factory = Runner if same_user else DifferentUser
+        runner = factory(
             Launch("codex", tmp_path, executable=str(path), bus_call=bus_call)
         )
         try:
             await runner.open(None)
             await complete(runner)
-            assert calls == [("inbox", {})]
+            assert calls == ([("inbox", {})] if same_user else [])
         finally:
             await runner.close()
         assert not runner.callbacks

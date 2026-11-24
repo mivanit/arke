@@ -30,7 +30,10 @@ def test_dashboard_bus_scopes_and_paused_mail(
         listing = client.get("/api/conversations", headers=OWNER).json()
         cid = listing["shared"]
         dashboard = app.state.dashboard
-        dashboard.prepare_launch(cid, app.state.conversations.profiles["code"])
+        assert client.portal is not None
+        client.portal.call(
+            dashboard.prepare_launch, cid, app.state.conversations.profiles["code"]
+        )
         cap = {"Authorization": "Bearer " + dashboard.capabilities[cid]}
         assert (
             client.post(f"/api/bus/{cid}/list", headers=cap, json={}).status_code == 200

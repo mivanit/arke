@@ -36,6 +36,11 @@ def subscription_config(config: dict[str, Any]) -> None:
         or providers.get("openai")
         or config.get("openai_base_url")
         or config.get("chatgpt_base_url")
+        not in (
+            None,
+            "https://chatgpt.com/backend-api",
+            "https://chatgpt.com/backend-api/",
+        )
     ):
         raise SubscriptionRequired(
             "Codex subscription mode does not accept custom OpenAI provider or endpoint overrides"
