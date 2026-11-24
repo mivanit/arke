@@ -21,6 +21,12 @@ from typing import Any
 
 from .harnesses import Adapter, Event, Launch, adapter
 
+INTERRUPT_TIMEOUT = 30.0
+INTERRUPT_COMPLETION_TIMEOUT = 15.0
+SHUTDOWN_GRACE = 5.0
+CLEANUP_TIMEOUT = 30.0
+CANCEL_GRACE = 2.0
+
 
 class Conflict(ValueError):
     """An operation targets stale state or an unresolved outcome."""
@@ -37,6 +43,8 @@ class Runtime:
     redirect: str | None = None
     interrupting: bool = False
     control: asyncio.Task[None] | None = None
+    cleanup: asyncio.Task[None] | None = None
+    turn_done: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -58,36 +66,58 @@ class Conversations:
         except BlockingIOError:
             self._lock.close()
             raise RuntimeError(f"another conversation manager owns {path}") from None
-        self.db = sqlite3.connect(path)
-        path.chmod(0o600)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, profile TEXT NOT NULL,
-                harness TEXT NOT NULL, cwd TEXT NOT NULL,
-                native_id TEXT, paused INTEGER NOT NULL, state TEXT NOT NULL,
-                error TEXT NOT NULL DEFAULT '', created REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS requests (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL,
-                id TEXT NOT NULL, text TEXT NOT NULL, mode TEXT NOT NULL,
-                origin TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
-                UNIQUE(conversation, id)
-            );
-            CREATE TABLE IF NOT EXISTS history (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL,
-                request TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, created REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS request_queue ON requests(conversation, status, seq);
-            CREATE INDEX IF NOT EXISTS history_page ON history(conversation, seq);
-        """)
-        with self.db:
-            self.db.execute(
-                "UPDATE requests SET status='uncertain' WHERE status IN ('starting', 'running')"
-            )
-            self.db.execute("UPDATE conversations SET paused=1, state='paused'")
+        try:
+            self.db = sqlite3.connect(path)
+            path.chmod(0o600)
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.executescript("""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, profile TEXT NOT NULL,
+                    harness TEXT NOT NULL, cwd TEXT NOT NULL,
+                    native_id TEXT, paused INTEGER NOT NULL, state TEXT NOT NULL,
+                    error TEXT NOT NULL DEFAULT '', created REAL NOT NULL,
+                    runner TEXT NOT NULL DEFAULT 'local', native_home TEXT
+                );
+                CREATE TABLE IF NOT EXISTS requests (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL,
+                    id TEXT NOT NULL, text TEXT NOT NULL, mode TEXT NOT NULL,
+                    origin TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
+                    UNIQUE(conversation, id)
+                );
+                CREATE TABLE IF NOT EXISTS history (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL,
+                    request TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, created REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS request_queue ON requests(conversation, status, seq);
+                CREATE INDEX IF NOT EXISTS history_page ON history(conversation, seq);
+            """)
+            with self.db:
+                columns = {
+                    row[1]
+                    for row in self.db.execute("PRAGMA table_info(conversations)")
+                }
+                if "runner" not in columns:
+                    self.db.execute(
+                        "ALTER TABLE conversations ADD COLUMN runner TEXT NOT NULL DEFAULT 'local'"
+                    )
+                if "native_home" not in columns:
+                    self.db.execute(
+                        "ALTER TABLE conversations ADD COLUMN native_home TEXT"
+                    )
+                self.db.execute(
+                    "UPDATE requests SET status='uncertain' WHERE status IN ('starting', 'running')"
+                )
+                self.db.execute("UPDATE conversations SET paused=1, state='paused'")
+        except BaseException:
+            if hasattr(self, "db"):
+                self.db.close()
+            self._lock.close()
+            raise
         self.profiles = profiles
         self.factory = factory
         self.prepare_launch: Callable[[str, Launch], Launch] = lambda cid, launch: (
@@ -95,6 +125,7 @@ class Conversations:
         )
         self.runtime: dict[str, Runtime] = {}
         self.closed = False
+        self._close_task: asyncio.Task[None] | None = None
 
     def _row(self, cid: str) -> dict[str, Any]:
         row = self.db.execute(
@@ -125,6 +156,12 @@ class Conversations:
     def create(self, profile: str, name: str = "") -> str:
         if self.closed:
             raise Conflict("manager is stopping")
+        with self.db:
+            return self._create(profile, name)
+
+    def _create(self, profile: str, name: str) -> str:
+        if self.closed:
+            raise Conflict("manager is stopping")
         if profile not in self.profiles:
             raise ValueError("unknown launch profile")
         if not self.profiles[profile].cwd.is_dir():
@@ -132,20 +169,72 @@ class Conversations:
         if len(name) > 100:
             raise ValueError("name must be at most 100 characters")
         cid = uuid.uuid4().hex
-        with self.db:
-            launch = self.profiles[profile]
-            self.db.execute(
-                "INSERT INTO conversations VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', '', ?)",
-                (
-                    cid,
-                    name or profile,
-                    profile,
-                    launch.harness,
-                    str(launch.cwd.resolve()),
-                    time.time(),
-                ),
-            )
+        launch = self.profiles[profile]
+        self.db.execute(
+            "INSERT INTO conversations (id,name,profile,harness,cwd,native_id,paused,state,error,created,runner,native_home) "
+            "VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', '', ?, ?, ?)",
+            (
+                cid,
+                name or profile,
+                profile,
+                launch.harness,
+                str(launch.cwd.resolve()),
+                time.time(),
+                launch.runner,
+                str(launch.native_home.resolve())
+                if launch.native_home is not None
+                else None,
+            ),
+        )
         return cid
+
+    def get_or_create_shared(self, profile: str, name: str = "") -> str:
+        """Sharing is an explicit persisted identity, never inferred from a profile."""
+        if self.closed:
+            raise Conflict("manager is stopping")
+        with self.db:
+            shared = self.db.execute(
+                "SELECT value FROM metadata WHERE key='shared_conversation'"
+            ).fetchone()
+            if shared:
+                row = self._row(shared[0])
+                launch = self.profiles.get(profile)
+                if (
+                    row["profile"] != profile
+                    or launch is None
+                    or not self._matches_launch(row, launch)
+                ):
+                    raise ValueError(
+                        "the shared conversation's profile, workspace, or execution binding changed; restore its configuration or use a fresh state directory"
+                    )
+                return shared[0]
+            cid = self._create(profile, name)
+            self.db.execute(
+                "INSERT INTO metadata(key,value) VALUES ('shared_conversation',?)",
+                (cid,),
+            )
+            return cid
+
+    @staticmethod
+    def _matches_launch(row: dict[str, Any], launch: Launch) -> bool:
+        return (row["harness"], row["cwd"], row["runner"], row["native_home"]) == (
+            launch.harness,
+            str(launch.cwd.resolve()),
+            launch.runner,
+            str(launch.native_home.resolve())
+            if launch.native_home is not None
+            else None,
+        )
+
+    def _launch(self, row: dict[str, Any]) -> Launch:
+        launch = self.profiles.get(row["profile"])
+        if launch is None:
+            raise ValueError("launch profile was removed; restore it before resuming")
+        if not self._matches_launch(row, launch):
+            raise ValueError(
+                "this conversation's harness, workspace, or execution binding changed; restore its profile or create a fresh conversation"
+            )
+        return launch
 
     def list_conversations(self) -> list[dict[str, Any]]:
         return [
@@ -167,10 +256,17 @@ class Conversations:
         row = self._row(cid)
         # Native references and launch arguments never cross the browser API.
         row.pop("native_id")
+        row.pop("runner")
+        row.pop("native_home")
         rt = self._rt(cid)
         launch = self.profiles.get(row["profile"])
         return row | {
             "paused": bool(row["paused"]),
+            "held": self.db.execute(
+                "SELECT 1 FROM requests WHERE conversation=? AND status='held' LIMIT 1",
+                (cid,),
+            ).fetchone()
+            is not None,
             "profile_available": launch is not None,
             "active": rt.active,
             "revision": f"{rt.generation}:{rt.revision}",
@@ -182,7 +278,7 @@ class Conversations:
             "queue": [
                 dict(r)
                 for r in self.db.execute(
-                    "SELECT id,text,status,origin,mode FROM requests WHERE conversation=? AND status IN ('queued','starting','running','uncertain') ORDER BY seq",
+                    "SELECT id,text,status,origin,mode FROM requests WHERE conversation=? AND status IN ('queued','held','starting','running','uncertain') ORDER BY seq",
                     (cid,),
                 )
             ],
@@ -232,21 +328,24 @@ class Conversations:
             raise Conflict(
                 "the targeted turn is no longer active or is already being interrupted"
             )
-        if (
+        if not redirect and (
             self.db.execute(
-                "SELECT count(*) FROM requests WHERE conversation=? AND status='queued'",
+                "SELECT count(*) FROM requests WHERE conversation=? AND status IN ('queued','held')",
                 (cid,),
             ).fetchone()[0]
             >= 100
         ):
             raise Conflict("queue is full; discard pending messages first")
         with self.db:
+            if redirect:
+                self.db.execute(
+                    "UPDATE requests SET status='held' WHERE conversation=? AND status='queued'",
+                    (cid,),
+                )
             self.db.execute(
                 "INSERT INTO requests(conversation,id,text,mode,origin,status,created) VALUES (?,?,?,?,?,'queued',?)",
                 (cid, request_id, text, mode, origin, time.time()),
             )
-            if redirect:
-                self.db.execute("UPDATE conversations SET paused=1 WHERE id=?", (cid,))
         if redirect:
             rt.redirect = request_id
             if rt.started:
@@ -258,11 +357,22 @@ class Conversations:
 
     def _ensure_worker(self, cid: str) -> None:
         rt = self._rt(cid)
+        if (
+            rt.cleanup is not None
+            and rt.cleanup.done()
+            and (rt.cleanup.cancelled() or rt.cleanup.exception() is not None)
+        ):
+            raise Conflict(
+                "native cleanup failed; inspect execution before restarting the service"
+            )
         if rt.task is None or rt.task.done():
             rt.closing = False
             rt.task = asyncio.create_task(self._worker(cid))
 
     def resume(self, cid: str) -> None:
+        if self.closed:
+            raise Conflict("manager is stopping")
+        self._launch(self._row(cid))
         rt = self._rt(cid)
         if rt.active or rt.interrupting:
             raise Conflict("wait for the active turn to finish")
@@ -272,8 +382,13 @@ class Conversations:
             raise Conflict(
                 "inspect the native conversation and resolve uncertain requests before resuming"
             )
-        self._change(cid, paused=0, state="idle", error="")
         self._ensure_worker(cid)
+        with self.db:
+            self.db.execute(
+                "UPDATE requests SET status='queued' WHERE conversation=? AND status='held'",
+                (cid,),
+            )
+        self._change(cid, paused=0, state="idle", error="")
         rt.wake.set()
 
     def discard(self, cid: str, request_id: str) -> None:
@@ -281,11 +396,11 @@ class Conversations:
         rt = self._rt(cid)
         with self.db:
             result = self.db.execute(
-                "UPDATE requests SET status='discarded' WHERE conversation=? AND id=? AND status='queued'",
+                "UPDATE requests SET status='discarded' WHERE conversation=? AND id=? AND status IN ('queued','held')",
                 (cid, request_id),
             )
         if not result.rowcount:
-            raise Conflict("only queued messages can be discarded")
+            raise Conflict("only queued or held messages can be discarded")
         if rt.redirect == request_id:
             rt.redirect = None
         self._change(cid)
@@ -323,11 +438,22 @@ class Conversations:
     async def _interrupt(self, cid: str) -> None:
         rt = self._rt(cid)
         try:
+            if rt.turn_done.is_set():
+                return
             assert rt.adapter is not None
-            await asyncio.wait_for(rt.adapter.interrupt(), 30)
+            await asyncio.wait_for(rt.adapter.interrupt(), INTERRUPT_TIMEOUT)
+            # A native ACK only confirms receipt. Do not run the redirect until
+            # the old turn iterator has ended, including its transport cleanup.
+            await asyncio.wait_for(rt.turn_done.wait(), INTERRUPT_COMPLETION_TIMEOUT)
         except Exception as exc:  # noqa: BLE001 — preserve uncertain native outcomes, never replay
+            if rt.turn_done.is_set():
+                return
             rt.redirect = None
-            self._change(cid, paused=1, error=f"Could not confirm interruption: {exc}")
+            self._uncertain(
+                cid, f"Could not confirm interruption: {exc or type(exc).__name__}"
+            )
+            if rt.task is not None:
+                rt.task.cancel()
         finally:
             rt.interrupting = False
             rt.wake.set()
@@ -377,6 +503,7 @@ class Conversations:
                     await rt.wake.wait()
                     continue
                 rt.active, rt.started = job["id"], False
+                rt.turn_done.clear()
                 rt.preview = ""
                 with self.db:
                     self.db.execute(
@@ -384,19 +511,8 @@ class Conversations:
                         (cid, rt.active),
                     )
                 self._change(cid, state="starting", error="")
+                launch = self._launch(row)
                 if rt.adapter is None:
-                    launch = self.profiles.get(row["profile"])
-                    if launch is None:
-                        raise ValueError(
-                            "launch profile was removed; restore it before resuming"
-                        )
-                    if (launch.harness, str(launch.cwd.resolve())) != (
-                        row["harness"],
-                        row["cwd"],
-                    ):
-                        raise ValueError(
-                            "this conversation's harness or workspace changed; restore its profile or create a fresh conversation"
-                        )
                     rt.adapter = self.factory(self.prepare_launch(cid, launch))
                     native_id = await rt.adapter.open(row["native_id"])
                     self._change(cid, native_id=native_id)
@@ -460,6 +576,7 @@ class Conversations:
                     self._change(cid)
                 if not terminal:
                     raise ConnectionError("native stream ended without a turn result")
+                rt.turn_done.set()
                 rt.active, rt.started, rt.preview = None, False, ""
                 rt.approvals.clear()
                 self._change(
@@ -468,29 +585,71 @@ class Conversations:
         except asyncio.CancelledError:
             self._uncertain(
                 cid,
-                "Server stopped during the turn; inspect its outcome before resuming.",
+                self._row(cid)["error"]
+                or "Execution stopped during the turn; inspect its outcome before resuming.",
             )
             raise
         except Exception as exc:  # noqa: BLE001 — preserve uncertain native outcomes, never replay
             self._uncertain(cid, str(exc))
         finally:
-            if rt.control is not None and not rt.control.done():
-                rt.control.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await rt.control
-            if rt.adapter is not None:
-                try:
-                    await rt.adapter.close()
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "closing native conversation %s", cid
-                    )
-            rt.adapter = None
-            rt.active = None
-            rt.approvals.clear()
-            rt.redirect = None
-            rt.started = False
-            self._change(cid)
+            rt.cleanup = asyncio.create_task(self._cleanup(cid))
+            try:
+                await asyncio.shield(rt.cleanup)
+            except asyncio.CancelledError:
+                # Cancellation during cleanup must not abandon the child process.
+                await asyncio.shield(rt.cleanup)
+                raise
+
+    async def _cleanup(self, cid: str) -> None:
+        rt = self._rt(cid)
+        if rt.control is not None and not rt.control.done():
+            rt.control.cancel()
+            done, _ = await asyncio.wait({rt.control}, timeout=CANCEL_GRACE)
+            if not done:
+                raise RuntimeError(
+                    "interrupt task did not stop; database ownership retained"
+                )
+            with contextlib.suppress(asyncio.CancelledError):
+                rt.control.result()
+        if rt.adapter is not None:
+            closing = asyncio.create_task(rt.adapter.close())
+            done, _ = await asyncio.wait({closing}, timeout=CLEANUP_TIMEOUT)
+            if not done:
+                closing.cancel()
+                done, _ = await asyncio.wait({closing}, timeout=CANCEL_GRACE)
+            if not done:
+                # A broken injected adapter must not let us release the database
+                # lock while its cleanup is still alive. Production runners own
+                # forced process termination and must satisfy this close contract.
+                raise RuntimeError(
+                    "adapter cleanup did not stop; database ownership retained"
+                )
+            try:
+                closing.result()
+            except asyncio.CancelledError:
+                self._change(
+                    cid, paused=1, error="Native cleanup exceeded its deadline"
+                )
+                raise RuntimeError(
+                    "adapter cleanup timed out; database ownership retained"
+                ) from None
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "closing native conversation %s", cid
+                )
+                self._change(
+                    cid,
+                    paused=1,
+                    error="Native cleanup failed; inspect the execution process",
+                )
+                raise
+        rt.adapter = None
+        rt.active = None
+        rt.approvals.clear()
+        rt.redirect = None
+        rt.started = False
+        rt.turn_done.set()
+        self._change(cid)
 
     def _uncertain(self, cid: str, error: str) -> None:
         rt = self._rt(cid)
@@ -504,7 +663,13 @@ class Conversations:
         self._change(cid, paused=1, state="paused", error=error)
 
     async def close(self) -> None:
-        self.closed = True
+        """Close once; cancellation of one caller does not abandon owned resources."""
+        if self._close_task is None:
+            self.closed = True
+            self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(self._close_task)
+
+    async def _close(self) -> None:
         tasks = []
         for cid, rt in self.runtime.items():
             rt.closing = True
@@ -514,9 +679,22 @@ class Conversations:
             if rt.task is not None:
                 tasks.append(rt.task)
         if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=15)
+            _, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE)
             for task in pending:
                 task.cancel()
+            _, pending = await asyncio.wait(
+                tasks, timeout=CLEANUP_TIMEOUT + CANCEL_GRACE + 1
+            )
+            if pending:
+                raise RuntimeError(
+                    "conversation tasks did not stop; database ownership retained"
+                )
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Failed cleanup retains ownership rather than allowing another manager
+        # to resume a native session whose execution may still be alive.
+        for rt in self.runtime.values():
+            if rt.cleanup is not None:
+                rt.cleanup.result()
+            rt.changed.set()
         self.db.close()
         self._lock.close()

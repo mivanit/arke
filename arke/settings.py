@@ -90,13 +90,14 @@ def server_key(values: dict[str, Any]) -> str:
     )
 
 
-def load() -> dict[str, Any]:
-    filename: Path = config_file()
+def load(filename: Path | None = None) -> dict[str, Any]:
+    explicit = filename is not None
+    filename = filename if filename is not None else config_file()
     try:
         with filename.open("rb") as stream:
             data: dict[str, Any] = tomllib.load(stream)
     except FileNotFoundError:
-        if not os.environ.get("ARKE_CONFIG"):
+        if not explicit and not os.environ.get("ARKE_CONFIG"):
             return {}
         raise
     except tomllib.TOMLDecodeError as e:

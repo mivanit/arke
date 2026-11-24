@@ -27,6 +27,9 @@ class WebConfig:
     # Each chat credential sees only the single shared conversation. Dashboard access is owner-only.
     title: str = "Agent"
     bus_config: Path | None = None
+    # Paths that must never be mounted into a shared worker, including explicit
+    # credential/config files outside the default state directory.
+    protected_paths: tuple[Path, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -74,10 +77,25 @@ def load(path: Path) -> WebConfig:
             "instructions",
             "mcp_servers",
             "executable",
+            "runner",
+            "image",
+            "native_home",
         }
         if unknown:
             raise ValueError(f"{name}: unknown settings: {', '.join(sorted(unknown))}")
-        profiles[name] = Launch(**(values | {"cwd": resolve(values["cwd"])}))
+        profiles[name] = Launch(
+            **(
+                values
+                | {
+                    "cwd": resolve(values["cwd"]),
+                    "native_home": resolve(values["native_home"])
+                    if values.get("native_home")
+                    else None,
+                }
+            )
+        )
+        if profiles[name].runner not in ("local", "container"):
+            raise ValueError(f"{name}: runner must be local or container")
     if not profiles:
         raise ValueError("configure at least one [profiles.NAME] launch profile")
     shared = web.get("shared_profile")
@@ -113,4 +131,12 @@ def load(path: Path) -> WebConfig:
         dashboard=bool(web.get("dashboard", False)),
         title=web.get("title", "Agent"),
         bus_config=resolve(web["bus_config"]) if web.get("bus_config") else None,
+        protected_paths=tuple(
+            [path, state]
+            + [
+                resolve(web[key])
+                for key in ("owner_key_file", "chat_key_file", "bus_config")
+                if web.get(key)
+            ]
+        ),
     )

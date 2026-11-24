@@ -18,9 +18,17 @@ CHAT = {"Authorization": "Bearer " + "b" * 43}
 
 
 def config(tmp_path: Path, **overrides: Any) -> WebConfig:
+    workspace, native_home = tmp_path / "workspace", tmp_path / "native"
+    workspace.mkdir(parents=True, exist_ok=True)
+    native_home.mkdir(parents=True, exist_ok=True)
     values: dict[str, Any] = {
-        "state": tmp_path,
-        "profiles": {"code": Launch("codex", tmp_path)},
+        "state": tmp_path / "state",
+        "profiles": {
+            "code": Launch(
+                "codex", workspace, runner="container", native_home=native_home
+            ),
+            "private": Launch("codex", workspace),
+        },
         "owner_key": "a" * 43,
         "chat_key": "b" * 43,
         "shared_profile": "code",
@@ -65,7 +73,7 @@ def test_owner_chat_and_request_validation(tmp_path: Path) -> None:
             == 400
         )
         other = client.post(
-            "/api/conversations", headers=OWNER, json={"profile": "code"}
+            "/api/conversations", headers=OWNER, json={"profile": "private"}
         ).json()["id"]
         assert (
             client.get(f"/api/conversations/{other}", headers=CHAT).status_code == 403
@@ -169,3 +177,65 @@ def test_sse_snapshot_does_not_start_process(tmp_path: Path) -> None:
             await stream.aclose()
 
     asyncio.run(scenario())
+
+
+def test_shared_access_requires_execution_isolation(tmp_path: Path) -> None:
+    import pytest
+
+    settings = config(tmp_path, profiles={"code": Launch("codex", tmp_path)})
+    with (
+        pytest.raises(ValueError, match="requires runner"),
+        TestClient(create_app(settings, FakeAdapter)),
+    ):
+        pass
+
+
+def test_private_to_shared_never_adopts_private_history(tmp_path: Path) -> None:
+    with TestClient(
+        create_app(config(tmp_path, shared_profile=None, chat_key=""), FakeAdapter)
+    ) as client:
+        private = client.post(
+            "/api/conversations",
+            headers=OWNER,
+            json={"profile": "code", "name": "Private"},
+        ).json()["id"]
+    with TestClient(create_app(config(tmp_path), FakeAdapter)) as client:
+        listing = client.get("/api/conversations", headers=CHAT).json()
+        assert listing["shared"] != private
+        assert (
+            client.get(f"/api/conversations/{private}", headers=CHAT).status_code == 403
+        )
+
+
+def test_mount_with_explicit_lifetime(tmp_path: Path) -> None:
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
+
+    from arke.webapp import service_lifespan
+
+    child = create_app(config(tmp_path), FakeAdapter)
+
+    @asynccontextmanager
+    async def lifetime(parent: FastAPI) -> AsyncGenerator[None]:
+        async with service_lifespan(child):
+            yield
+
+    parent = FastAPI(lifespan=lifetime)
+    parent.mount("/agent", child)
+    with TestClient(parent) as client:
+        listing = client.get("/agent/api/conversations", headers=OWNER)
+        assert listing.status_code == 200
+        cid = listing.json()["shared"]
+        assert (
+            client.get(f"/agent/api/conversations/{cid}", headers=CHAT).status_code
+            == 200
+        )
+        manager = child.state.conversations
+    assert manager.closed
+    # Shutdown released the database lock; a new lifetime can own it.
+    with TestClient(parent) as client:
+        assert (
+            client.get("/agent/api/conversations", headers=CHAT).json()["shared"] == cid
+        )

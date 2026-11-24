@@ -8,45 +8,76 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import secrets
 from pathlib import Path
 
-from arke.harnesses import Launch, adapter
+from arke.harnesses import Adapter, Launch
+from arke.runner import Runner
+
+TURN_TIMEOUT = 180
+APPROVAL_TIMEOUT = 5
+
+
+async def verify_turn(native: Adapter, prompt: str, marker: str) -> str | None:
+    """Verify actual recall, rather than treating any successful turn as evidence."""
+    reference = None
+    messages: list[str] = []
+    completed = False
+    async with asyncio.timeout(TURN_TIMEOUT):
+        async for event in native.run(prompt):
+            if event.kind == "session":
+                reference = event.data["native_id"]
+            elif event.kind == "message":
+                messages.append(event.data["text"])
+            elif event.kind == "approval":
+                # These prompts need no tools. Deny once and fail explicitly;
+                # do not leave a smoke check waiting for an unattended approval.
+                async with asyncio.timeout(APPROVAL_TIMEOUT):
+                    await native.respond(event.data["request_id"], {"allow": False})
+                raise AssertionError(
+                    "unexpected approval during a tool-free recall check"
+                )
+            elif event.kind == "completed":
+                assert not completed, "multiple terminal results"
+                assert event.data["status"] == "completed", event.data
+                completed = True
+    assert completed, "native stream ended without a completed result"
+    actual = "\n".join(messages).strip()
+    assert actual == marker, "native response did not recall the exact marker"
+    return reference
 
 
 async def check(kind: str, cwd: Path, model: str | None) -> None:
     launch = Launch(kind, cwd, model=model)
-    native = adapter(launch)
+    marker = "ARKE_" + secrets.token_hex(16)
+    recall = "Reply with only the exact marker from my first message. Do not use tools."
+    native = Runner(launch)
     reference = None
     try:
         reference = await native.open(None)
-        for prompt in (
-            "Reply exactly ARKE_SUBSCRIPTION_OK. Do not use tools.",
-            "What exact marker did you just reply with? Do not use tools.",
-        ):
-            completed = False
-            async for event in native.run(prompt):
-                if event.kind == "session":
-                    reference = event.data["native_id"]
-                elif event.kind == "approval":
-                    await native.respond(event.data["request_id"], {"allow": False})
-                elif event.kind == "completed":
-                    assert event.data["status"] == "completed", event.data
-                    completed = True
-            assert completed
+        reference = (
+            await verify_turn(
+                native,
+                f"Remember this marker and reply with it exactly:\n{marker}\nDo not use tools.",
+                marker,
+            )
+            or reference
+        )
+        reference = await verify_turn(native, recall, marker) or reference
     finally:
         await native.close()
-    assert reference
-    resumed = adapter(launch)
+    assert reference, "native conversation reference was not saved"
+    resumed = Runner(launch)
     try:
         await resumed.open(reference)
-        async for event in resumed.run("Reply exactly RESUME_OK. Do not use tools."):
-            if event.kind == "approval":
-                await resumed.respond(event.data["request_id"], {"allow": False})
-            if event.kind == "completed":
-                assert event.data["status"] == "completed", event.data
+        # This prompt deliberately contains no nonce: a fresh conversation cannot
+        # pass merely by echoing its input.
+        await verify_turn(resumed, recall, marker)
     finally:
         await resumed.close()
-    print(f"{kind}: subscription authentication, follow-up, and resume succeeded")
+    print(
+        f"{kind}: subscription authentication and verified follow-up/resume recall succeeded"
+    )
 
 
 def main() -> None:

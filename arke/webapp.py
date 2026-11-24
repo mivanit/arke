@@ -14,7 +14,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-from .harnesses import Adapter, Launch, adapter
+from .harnesses import Adapter, Launch
+from .runner import Runner, validate_isolation
 from .sessions import Conflict, Conversations
 from .webconfig import WebConfig, load
 
@@ -24,45 +25,90 @@ def assets() -> Path:
     return installed if installed.is_dir() else Path(__file__).parent.parent / "web"
 
 
-def create_app(
-    config: WebConfig, factory: Callable[[Launch], Adapter] = adapter
-) -> FastAPI:
-    """Create an app without starting processes. Mount it in another ASGI application if desired."""
+@asynccontextmanager
+async def service_lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Own a conversation service once, including when mounted by a parent app.
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        manager = Conversations(
-            config.state / "conversations.sqlite3", config.profiles, factory
-        )
-        app.state.conversations = manager
-        app.state.shared = None
-        app.state.dashboard = None
-        try:
-            if config.shared_profile:
-                existing = [
-                    c
-                    for c in manager.list_conversations()
-                    if c["profile"] == config.shared_profile
-                ]
-                app.state.shared = (
-                    existing[0]["id"]
-                    if existing
-                    else manager.create(config.shared_profile, config.title)
+    Embedders enter this context from the parent's lifespan; ASGI mount does not
+    forward lifespan events. Standalone applications enter it automatically.
+    """
+    if getattr(app.state, "service_running", False):
+        raise RuntimeError("conversation service already has a lifetime owner")
+    config: WebConfig = app.state.config
+    protected = (config.state, *config.protected_paths)
+    if config.chat_key:
+        if not config.shared_profile or config.chat_key == config.owner_key:
+            raise ValueError(
+                "chat access needs a shared profile and distinct credential"
+            )
+        validate_isolation(config.profiles[config.shared_profile], protected)
+        shared_home = config.profiles[config.shared_profile].native_home
+        assert shared_home is not None
+        for name, launch in config.profiles.items():
+            if name != config.shared_profile and launch.native_home is not None:
+                other = launch.native_home.resolve()
+                if other.is_relative_to(
+                    shared_home.resolve()
+                ) or shared_home.resolve().is_relative_to(other):
+                    raise ValueError(
+                        "shared native_home must be exclusive to the shared profile"
+                    )
+    for launch in config.profiles.values():
+        if launch.runner == "container":
+            validate_isolation(launch, protected)
+    manager = Conversations(
+        config.state / "conversations.sqlite3", config.profiles, app.state.factory
+    )
+    app.state.service_running = True
+    app.state.conversations = manager
+    app.state.shared = None
+    app.state.dashboard = None
+    try:
+        if config.shared_profile:
+            app.state.shared = manager.get_or_create_shared(
+                config.shared_profile, config.title
+            )
+            if (
+                config.chat_key
+                and manager.db.execute(
+                    "SELECT 1 FROM conversations WHERE profile=? AND id<>? AND native_id IS NOT NULL",
+                    (config.shared_profile, app.state.shared),
+                ).fetchone()
+            ):
+                raise ValueError(
+                    "this profile has private native history; use a fresh shared profile and dedicated native_home"
                 )
-            if config.dashboard:
-                from .dashboard import Dashboard
+        if config.dashboard:
+            from .dashboard import Dashboard
 
-                app.state.dashboard = Dashboard(config, manager)
-                await app.state.dashboard.start()
-            yield
-        finally:
-            if app.state.dashboard:
-                app.state.dashboard.stop_event.set()
+            app.state.dashboard = Dashboard(config, manager)
+            for launch in config.profiles.values():
+                if launch.runner == "container":
+                    validate_isolation(launch, app.state.dashboard.protected_paths)
+            await app.state.dashboard.start()
+        yield
+    finally:
+        if app.state.dashboard:
+            app.state.dashboard.stop_event.set()
+        try:
             await manager.close()
-            if app.state.dashboard:
-                await app.state.dashboard.stop()
+        finally:
+            try:
+                if app.state.dashboard:
+                    await app.state.dashboard.stop()
+            finally:
+                app.state.service_running = False
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+def create_app(
+    config: WebConfig, factory: Callable[[Launch], Adapter] = Runner
+) -> FastAPI:
+    """Build the API; mounting hosts must explicitly enter service_lifespan(app)."""
+    app = FastAPI(
+        lifespan=service_lifespan, docs_url=None, redoc_url=None, openapi_url=None
+    )
+    app.state.config = config
+    app.state.factory = factory
 
     @app.middleware("http")
     async def boundary(request: Request, call_next: Callable[..., Any]) -> Response:
@@ -206,6 +252,10 @@ def create_app(
         ):
             raise ValueError("supply a profile and optional name")
         manager: Conversations = app.state.conversations
+        if data["profile"] == config.shared_profile:
+            raise ValueError(
+                "the shared profile is reserved for its shared conversation"
+            )
         cid = manager.create(data["profile"], data.get("name", ""))
         return manager.snapshot(cid)
 
@@ -228,7 +278,7 @@ def create_app(
         rt = manager._rt(cid)
 
         async def stream() -> AsyncIterator[str]:
-            # Always begin with a full bounded snapshot. Reconnect cursors cannot leave a history gap.
+            # Send a bounded recent window. Clients replace disjoint windows and page backward.
             while not manager.closed:
                 changed = rt.changed
                 snapshot = manager.snapshot(cid)

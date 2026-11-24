@@ -8,18 +8,20 @@ title = "Arke agents"
 # dashboard = true
 # bus_config = ".local/config.toml"
 
-# A standalone shared assistant uses one conversation for every connected browser:
-# shared_profile = "claude"
-# chat_key_file = ".local/conversations/chat.key"
+# This example is owner-only local execution: agents have this user's machine access.
+# For shared access use shared.agent.example.toml with an isolated container worker,
+# a dedicated workspace/native home, and separate private service state.
 # To serve a LAN, set host="0.0.0.0" and add the machine's actual IP/name to allowed_hosts.
 
 [profiles.claude]
 harness = "claude"
+runner = "local"
 cwd = "."
 instructions = ""
 
 [profiles.codex]
 harness = "codex"
+runner = "local"
 cwd = "."
 instructions = ""
 

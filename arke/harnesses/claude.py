@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shutil
 import uuid
@@ -221,7 +222,9 @@ class Claude:
                     return
         finally:
             if self.receiver is not None:
-                await self.receiver
+                self.receiver.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self.receiver
                 self.receiver = None
 
     async def interrupt(self) -> None:

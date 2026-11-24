@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +28,14 @@ class Launch:
     # Only the application owner supplies tools/configuration, never chat requests.
     mcp_servers: dict[str, Any] = field(default_factory=dict)
     executable: str | None = None
+    # Local execution is trusted owner access. Shared general-purpose agents use
+    # a container with only this workspace and a dedicated native home mounted.
+    runner: str = "local"
+    image: str = "arke-agent:local"
+    native_home: Path | None = None
+    bus_call: Callable[[str, dict[str, Any]], Any] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass

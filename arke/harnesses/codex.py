@@ -17,6 +17,31 @@ from .base import (
 )
 
 
+def subscription_config(config: dict[str, Any]) -> None:
+    """Validate effective native configuration, not just the account label.
+
+    Do not try to reinterpret custom provider configurations as subscription
+    access. Reject them before creating or submitting a native conversation.
+    """
+    if (
+        config.get("model_provider") != "openai"
+        or config.get("forced_login_method") != "chatgpt"
+    ):
+        raise SubscriptionRequired(
+            "Codex effective configuration must use ChatGPT login and the OpenAI provider"
+        )
+    providers = config.get("model_providers") or {}
+    if (
+        not isinstance(providers, dict)
+        or providers.get("openai")
+        or config.get("openai_base_url")
+        or config.get("chatgpt_base_url")
+    ):
+        raise SubscriptionRequired(
+            "Codex subscription mode does not accept custom OpenAI provider or endpoint overrides"
+        )
+
+
 class Codex:
     def __init__(self, launch: Launch) -> None:
         self.launch = launch
@@ -123,6 +148,10 @@ class Codex:
             "initialize", {"clientInfo": {"name": "arke", "version": "0.2.0"}}
         )
         await self._write({"method": "initialized"})
+        effective = await self._call(
+            "config/read", {"cwd": str(self.launch.cwd), "includeLayers": False}
+        )
+        subscription_config(effective.get("config", {}))
         account = await self._call("account/read", {"refreshToken": True})
         if (account.get("account") or {}).get("type") != "chatgpt":
             raise SubscriptionRequired(

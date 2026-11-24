@@ -50,6 +50,7 @@ from bisect import bisect_left
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import zip_longest
 from operator import itemgetter
@@ -220,11 +221,77 @@ PROC_S: float = float(SETTINGS.get("process_interval", 15))
 HORATIO_URL: str = SETTINGS.get("horatio_url", "")  # empty = off
 
 
+@dataclass(frozen=True)
+class BusConfig:
+    """Resources owned by one bus. Legacy CLI defaults remain available separately."""
+
+    state_dir: Path
+    log_file: Path
+    stale_seconds: float
+    process_interval: float
+    ntfy_url: str
+    horatio_url: str
+    transcript_roots: tuple[Path, ...]
+    values: dict[str, Any]
+
+    @classmethod
+    def legacy(cls) -> BusConfig:
+        return cls(
+            STATE_DIR,
+            LOG_FILE,
+            STALE_S,
+            PROC_S,
+            NTFY_URL,
+            HORATIO_URL,
+            tuple(TRANSCRIPT_ROOTS),
+            SETTINGS,
+        )
+
+    @classmethod
+    def from_file(cls, filename: Path) -> BusConfig:
+        # Explicit embedding configuration never inherits another bus's ARKE_* overrides.
+        values = settings.load(filename).get("server", {})
+        state = settings.path(values.get("state_dir", ".local/server"))
+        log_file = (
+            settings.path(values["log_file"])
+            if "log_file" in values
+            else state / "log.jsonl"
+        )
+        roots = tuple(
+            settings.path(p).resolve()
+            for p in values.get(
+                "transcript_roots", ["~/.claude/projects", "~/.codex/sessions"]
+            )
+        )
+        return cls(
+            state,
+            log_file,
+            float(values.get("stale_seconds", 900)),
+            float(values.get("process_interval", 15)),
+            values.get("ntfy_url", ""),
+            values.get("horatio_url", ""),
+            roots,
+            values,
+        )
+
+
 def log(event: str, **fields: Any) -> None:
+    write_log(LOG_FILE, event, fields)
+
+
+def write_log(path: Path, event: str, fields: dict[str, Any]) -> None:
     """Append a diagnostic event; log I/O failures must not change delivery or wake outcomes."""
     line: str = json.dumps({"ts": time.time(), "event": event, **fields})
     try:
-        with LOG_LOCK, LOG_FILE.open("a+b") as f:
+        with (
+            LOG_LOCK,
+            (
+                os.fdopen(
+                    os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600),
+                    "a+b",
+                )
+            ) as f,
+        ):
             if f.tell():
                 f.seek(-1, os.SEEK_END)
                 if f.read(1) != b"\n":
@@ -319,7 +386,8 @@ def candidates(body: dict[str, Any]) -> list[str]:
 
 
 class Bus:
-    def __init__(self, state_file: Path) -> None:
+    def __init__(self, state_file: Path, config: BusConfig | None = None) -> None:
+        self._config = config
         self.state_file: Path = state_file.with_suffix(".sqlite3")
         self.store: Store = Store(self.state_file)
         self.cond: threading.Condition = (
@@ -367,6 +435,19 @@ class Bus:
                 f"loaded {len(self.agents)} agents, {len(self.messages)} messages",
                 flush=True,
             )
+
+    @property
+    def config(self) -> BusConfig:
+        return self._config if self._config is not None else BusConfig.legacy()
+
+    def log(self, event: str, **fields: Any) -> None:
+        if self._config is None:
+            log(event, **fields)
+        else:
+            write_log(self._config.log_file, event, fields)
+
+    def wake_failed(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return wake_failed(*args, logger=self.log, **kwargs)
 
     def save(self) -> None:
         """Mark this change() for commit; it commits before returning."""
@@ -446,7 +527,7 @@ class Bus:
                 self.pending_events = None
             self.cond.notify_all()
             for event, fields in events:
-                log(
+                self.log(
                     event, **fields
                 )  # prints a failed write (full disk); the change is already committed
 
@@ -522,7 +603,7 @@ class Bus:
                 f"its tmux pane {a['tmux'].rsplit(':', 1)[1]} no longer exists",
             )
         idle_for: float = time.time() - (a.get("last_active") or time.time())
-        if a["state"] == "busy" and idle_for > STALE_S:
+        if a["state"] == "busy" and idle_for > self.config.stale_seconds:
             return "stale", f"busy but no hook activity for {int(idle_for / 60)}m"
         return "yes", ""
 
@@ -1563,7 +1644,7 @@ class Bus:
                     )  # idle agents are woken by wake_pass
             self.record("message", **m)
             self.save()
-        ntfy(m)
+        ntfy(m, self.config.ntfy_url)
         return {
             **r,
             "id": m["id"],
@@ -2106,7 +2187,7 @@ class Bus:
                         harness=snapshot,
                     )
                 else:
-                    w = wake_failed(
+                    w = self.wake_failed(
                         w, snapshot["name"], "", "no verified tmux pane for fallback"
                     )
             except Exception as e:  # noqa: BLE001 — printed with its traceback; one agent's bug mustn't stop the others' wake-ups
@@ -2181,7 +2262,7 @@ class Bus:
 
         def held(why: str, **extra: Any) -> dict[str, Any]:
             if w.get("detail") != f"waiting: {why}":
-                log("wake_held", agent=a["name"], why=why)
+                self.log("wake_held", agent=a["name"], why=why)
             # down_since only while the daemon keeps not answering
             return (
                 {k: v for k, v in w.items() if k != "down_since"}
@@ -2204,7 +2285,7 @@ class Bus:
             since: float = w.get("down_since", now)
             if now - since < CODEX_DOWN_S:
                 return held(f"its Codex daemon isn't answering ({e})", down_since=since)
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 a["name"],
                 senders,
@@ -2212,7 +2293,7 @@ class Bus:
                 error=f"codex daemon: {e}",
             )
         except Exception as e:  # noqa: BLE001 — logged with its traceback; one odd reply mustn't stop the other wake-ups
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 a["name"],
                 senders,
@@ -2223,11 +2304,11 @@ class Bus:
         if status != "started":
             # notLoaded: no Codex has it open; starting a turn would run it with nobody watching
             if status == "notLoaded":
-                return wake_failed(
+                return self.wake_failed(
                     w, a["name"], senders, "its Codex thread is notLoaded"
                 )
             return held(f"its Codex thread is {status}")
-        log(
+        self.log(
             "wake",
             agent=a["name"],
             sender=senders,
@@ -2281,7 +2362,7 @@ class Bus:
         senders: str = ", ".join(dict.fromkeys(m["from"] for m in unread))
         notice: str = wake_notice(unread)
         if not pane_alive(tmux, fresh=True):
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 name,
                 senders,
@@ -2335,7 +2416,7 @@ class Bus:
                         else "can't find its prompt box"
                     )
                     if w.get("status") != "held":
-                        log("wake_held", agent=name, why=why)
+                        self.log("wake_held", agent=name, why=why)
                     return w | {
                         "status": "held",
                         "at": now,
@@ -2354,7 +2435,9 @@ class Bus:
                         if stuck
                         else "no prompt box on its screen; not typing blind"
                     )
-                    return wake_failed(w, name, senders, why, error=why.split(";")[0])
+                    return self.wake_failed(
+                        w, name, senders, why, error=why.split(";")[0]
+                    )
                 # a draft left alone: the notice goes after the whole draft, never at the cursor (which may sit
                 # mid-word): down to its last line, then to its end; if that changed the text (e.g. stepped through
                 # prompt history), give up and wait again
@@ -2383,7 +2466,7 @@ class Bus:
             if (
                 w.get("status") != "held" or w.get("detail") != f"waiting: {e}"
             ):  # once per reason, not every pass
-                log("wake_held", agent=name, why=str(e))
+                self.log("wake_held", agent=name, why=str(e))
             return w | {
                 "status": "held",
                 "at": now,
@@ -2393,7 +2476,7 @@ class Bus:
             }
         except (OSError, subprocess.TimeoutExpired) as e:
             err = f"tmux: {e}"
-        log(
+        self.log(
             "wake",
             agent=name,
             sender=senders,
@@ -2430,13 +2513,16 @@ class Bus:
                 snapshot.get("turn_offset", 0),
             )
             try:
-                if not any(path.resolve().is_relative_to(r) for r in TRANSCRIPT_ROOTS):
+                if not any(
+                    path.resolve().is_relative_to(r)
+                    for r in self.config.transcript_roots
+                ):
                     continue
                 end, found = turn_marker(path, offset)
             except OSError:
                 continue  # transcript gone or unreadable: the hooks are all there is
             except Exception as e:  # noqa: BLE001 — logged; one odd transcript mustn't stop the others' wake-ups
-                log(
+                self.log(
                     "turn_error",
                     sid=sid,
                     path=str(path),
@@ -2519,12 +2605,12 @@ class Bus:
             "scope": "project" if project else "peers" if observer else "global",
             "projects": projects,
             "as_of": now,
-            "stale_seconds": STALE_S,
+            "stale_seconds": self.config.stale_seconds,
             "include_ended": show_all,
             "ended": ended,
             "total": len(selected),
             "agents": [
-                roster.describe(a, now, STALE_S)
+                roster.describe(a, now, self.config.stale_seconds)
                 for a in sorted(selected, key=itemgetter("name"))
                 if show_all or a["state"] != "offline"
             ],
@@ -2669,7 +2755,7 @@ class Bus:
             "local": a.get("host") == LOCAL_HOST,
             "reachable": st[0],
             "reachable_why": st[1],
-            "presence": roster.presence(a, time.time(), STALE_S),
+            "presence": roster.presence(a, time.time(), self.config.stale_seconds),
             "color": color,
             "procs": procs,
             # recent activity, trimmed: the console polls /agents every few seconds (full targets are in the event log)
@@ -2841,7 +2927,14 @@ class Bus:
                         )
             return out[::-1]
 
-        return read_transcript(Path(path), msgs, cursor, limit, before)
+        return read_transcript(
+            Path(path),
+            msgs,
+            cursor,
+            limit,
+            before,
+            self._config.transcript_roots if self._config else None,
+        )
 
 
 def watch_agents(bus: Bus, stop: threading.Event | None = None) -> None:
@@ -2857,11 +2950,13 @@ def watch_agents(bus: Bus, stop: threading.Event | None = None) -> None:
             bus.turn_pass,
             bus.wake_pass,
         ):  # one failing step mustn't starve the others
+            if stop is not None and stop.is_set():
+                return
             try:
                 step()
             except Exception as e:  # noqa: BLE001 — printed with its traceback, not hidden; the next pass tries again
                 print(f"watch_agents: {traceback.format_exc()}", flush=True)
-                log(
+                bus.log(
                     "watch_error",
                     step=step.__name__,
                     error=f"{type(e).__name__}: {e}",
@@ -2880,8 +2975,8 @@ def sample_procs(bus: Bus, stop: threading.Event | None = None) -> None:
     last: float = time.time()
     while True:
         if stop is None:
-            time.sleep(PROC_S)
-        elif stop.wait(PROC_S):
+            time.sleep(bus.config.process_interval)
+        elif stop.wait(bus.config.process_interval):
             return
         try:
             procs: dict[int, dict[str, Any]] = proc_table()
@@ -2965,7 +3060,7 @@ def sample_procs(bus: Bus, stop: threading.Event | None = None) -> None:
             bus.procs_now = agents
         if agents or ended:
             try:
-                log("procs", agents=agents, started=started, ended=ended)
+                bus.log("procs", agents=agents, started=started, ended=ended)
             except (
                 OSError
             ) as e:  # e.g. a full disk: printed, and the next sample tries again
@@ -3077,16 +3172,18 @@ def read_events(
     generation: str = "",
     procs_totals: bool = False,
     from_ts: float | None = None,
+    config: BusConfig | None = None,
 ) -> dict[str, Any]:
     """Raw event log from byte offset `since` (optionally only some event types). `next` is where to continue.
     procs_totals: procs events are cut to their totals (see `totals`).
     from_ts (with since 0): start with the checkpoint for that time (checkpoints.py) and continue at its cut,
     instead of reading from byte 0; `from` says which UTC midnight the checkpoint stands for."""
-    if not LOG_FILE.exists():
+    resource = config if config is not None else BusConfig.legacy()
+    if not resource.log_file.exists():
         return {"events": [], "next": 0, "generation": "missing"}
     events: list[dict[str, Any]] = []
     pos: int = since
-    with LOG_FILE.open("rb") as f:
+    with resource.log_file.open("rb") as f:
         stat: os.stat_result = os.fstat(f.fileno())
         current: str = f"{stat.st_dev:x}:{stat.st_ino:x}"
         if generation and generation != current:
@@ -3101,7 +3198,7 @@ def read_events(
         # the checkpoint and the read after it come from this one open file, so they describe the same log
         cp: dict[str, Any] | None = (
             checkpoints.before(
-                f, stat.st_size, current, from_ts, STATE_DIR / "checkpoints"
+                f, stat.st_size, current, from_ts, resource.state_dir / "checkpoints"
             )
             if from_ts is not None and since == 0
             else None
@@ -3152,6 +3249,7 @@ def wake_failed(
     senders: str,
     detail: str,
     error: str = "",
+    logger: Callable[..., None] | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
     """Log a failed wake-up and give the wake record that says so (the console shows `detail`)."""
@@ -3159,7 +3257,7 @@ def wake_failed(
         "via": w.get("transport", ""),
         "fallback": w.get("fallback", ""),
     }
-    log(
+    (logger or log)(
         "wake",
         agent=name,
         sender=senders,
@@ -3173,9 +3271,10 @@ def wake_failed(
 CODEX_DOWN_S: float = 60.0  # a daemon that doesn't answer (restarting, updating) is retried this long before failed
 
 
-def ntfy(m: Message) -> None:
+def ntfy(m: Message, url: str | None = None) -> None:
     """Push to the self-hosted ntfy: messages to you loudly, broadcasts normally, everything else silently."""
-    if not NTFY_URL:
+    url = NTFY_URL if url is None else url
+    if not url:
         return
     kinds: set[str] = {t["kind"] for t in m["to"]}
     topic: str = "arke-human" if "human" in kinds else "arke"
@@ -3188,7 +3287,7 @@ def ntfy(m: Message) -> None:
         # in the thread: the message is already committed, so a bad ntfy_url only gets printed
         try:
             req: urllib.request.Request = urllib.request.Request(
-                f"{NTFY_URL}/{topic}",
+                f"{url}/{topic}",
                 data=m["text"].encode(),
                 method="POST",
                 headers={
@@ -3306,25 +3405,25 @@ def dispatch(
                 "mem_total_mb": mem_kb // 1024,
             }
         case "GET", ["horatio", "history"]:
-            if not HORATIO_URL:
+            if not bus.config.horatio_url:
                 raise HttpError(
                     404,
                     "horatio is not configured (set [server].horatio_url)",
                 )
             try:
                 with urllib.request.urlopen(
-                    f"{HORATIO_URL}/api/history?hours={float(q.get('hours', 6))}",
+                    f"{bus.config.horatio_url}/api/history?hours={float(q.get('hours', 6))}",
                     timeout=20,
                 ) as r:
                     if r.headers.get_content_type() != "application/json":
                         raise HttpError(
                             502,
-                            f"{HORATIO_URL} answered {r.headers.get_content_type()}, not horatio's JSON",
+                            f"{bus.config.horatio_url} answered {r.headers.get_content_type()}, not horatio's JSON",
                         )
                     return (200, r.read(), "application/json")
             except OSError as e:
                 raise HttpError(
-                    502, f"horatio at {HORATIO_URL} unreachable: {e}"
+                    502, f"horatio at {bus.config.horatio_url} unreachable: {e}"
                 ) from e
         case "GET", ["fileinfo"]:
             out = bus.file_info(q.get("path", ""))
@@ -3343,6 +3442,7 @@ def dispatch(
                 q.get("generation", ""),
                 q.get("procs") == "totals",
                 from_ts,
+                bus._config,
             )
         case "POST", ["hook"]:
             out = bus.hook(body)
@@ -3639,14 +3739,18 @@ def browser_host(host: str) -> bool:
         )
 
 
-def private_state() -> None:
+def private_state(config: BusConfig | None = None) -> None:
     """Mail, tool targets and backups are private: files made from here on are owner-only, and a state dir (or log)
     made before, with the default umask, is closed to other local users too."""
-    os.umask(0o077)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.chmod(0o700)
-    if LOG_FILE.exists():  # it may live outside the state dir (ARKE_LOG / log_file)
-        LOG_FILE.chmod(0o600)
+    resource = config if config is not None else BusConfig.legacy()
+    if config is None:
+        os.umask(0o077)
+    resource.state_dir.mkdir(parents=True, exist_ok=True)
+    resource.state_dir.chmod(0o700)
+    if (
+        resource.log_file.exists()
+    ):  # it may live outside the state dir (ARKE_LOG / log_file)
+        resource.log_file.chmod(0o600)
 
 
 def tailscale_ip() -> str:
@@ -3655,16 +3759,17 @@ def tailscale_ip() -> str:
     ).stdout.split()[0]
 
 
-def refuse_empty_start() -> None:
+def refuse_empty_start(config: BusConfig | None = None) -> None:
     """Exit instead of quietly starting an empty bus next to existing state (a forgotten migration or env rename,
     a database moved aside): new message ids would collide with the old ones."""
+    resource = config if config is not None else BusConfig.legacy()
     stale: list[str] = sorted(k for k in os.environ if k.startswith("AGENTBUS_"))
     if stale:
         raise SystemExit(
             f"{', '.join(stale)} set: remove legacy settings after migrating state; "
             "do not carry old AGENTBUS_DIR/AGENTBUS_LOG paths into the new service"
         )
-    database: Path = STATE_DIR / "state.sqlite3"
+    database: Path = resource.state_dir / "state.sqlite3"
     if (
         database.exists() and database.stat().st_size
     ):  # an emptied file is not a database
@@ -3674,17 +3779,19 @@ def refuse_empty_start() -> None:
     )  # an explicit ARKE_DIR is a new bus on purpose
     found: list[Path] = [
         p
-        for p in [LOG_FILE, STATE_DIR / "state.json"]
+        for p in [resource.log_file, resource.state_dir / "state.json"]
         + (
             []
-            if os.environ.get("ARKE_DIR") or "state_dir" in SETTINGS
+            if config is not None
+            or os.environ.get("ARKE_DIR")
+            or "state_dir" in resource.values
             else [old / "state.sqlite3", old / "state.json"]
         )
         if p.exists()
     ]
     if found:
         raise SystemExit(
-            f"no database at {STATE_DIR / 'state.sqlite3'}, but {', '.join(map(str, found))} exists, so this bus "
+            f"no database at {resource.state_dir / 'state.sqlite3'}, but {', '.join(map(str, found))} exists, so this bus "
             "has run before and a new one would reuse its message ids. Moving from agentbus: run its migration "
             "script (migrate_from_agentbus.py). Otherwise restore a backup (see DOCS.md), "
             "or move those files aside to start an empty bus."

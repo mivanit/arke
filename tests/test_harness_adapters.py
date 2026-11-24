@@ -29,6 +29,8 @@ for line in sys.stdin:
         result = {"userAgent": "fixture"}
     elif method == "account/read":
         result = {"account": {"type": "chatgpt"}, "requiresOpenaiAuth": True}
+    elif method == "config/read":
+        result = {"config": {"model_provider": "openai", "forced_login_method": "chatgpt"}}
     elif method in ("thread/start", "thread/resume"):
         result = {"thread": {"id": "thread-fixture", "turns": []}}
     elif method == "turn/start":
@@ -211,3 +213,22 @@ def test_claude_auth_and_owner_callback(
             await adapter.respond(approval.data["request_id"], {"allow": True})
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"model_provider": "custom"},
+        {"forced_login_method": "api"},
+        {"model_providers": {"openai": {"base_url": "https://example.invalid"}}},
+        {"openai_base_url": "https://example.invalid"},
+        {"chatgpt_base_url": "https://example.invalid"},
+    ],
+)
+def test_codex_rejects_effective_provider_overrides(overrides: dict[str, Any]) -> None:
+    from arke.harnesses.codex import subscription_config
+
+    with pytest.raises(SubscriptionRequired):
+        subscription_config(
+            {"model_provider": "openai", "forced_login_method": "chatgpt"} | overrides
+        )

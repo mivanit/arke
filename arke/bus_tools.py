@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.request
 from typing import Any
 
@@ -11,10 +12,26 @@ from typing import Any
 def main() -> None:
     from mcp.server.mcpserver import MCPServer
 
-    url, key = os.environ["ARKE_MANAGED_URL"], os.environ["ARKE_MANAGED_KEY"]
+    socket_path = os.environ.get("ARKE_MANAGED_SOCKET")
+    url, key = (
+        os.environ.get("ARKE_MANAGED_URL", ""),
+        os.environ.get("ARKE_MANAGED_KEY", ""),
+    )
     server = MCPServer("arke")
 
     def call(tool: str, data: dict[str, Any]) -> Any:
+        if socket_path:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(30)
+                connection.connect(socket_path)
+                connection.sendall(
+                    (json.dumps({"tool": tool, "data": data}) + "\n").encode()
+                )
+                with connection.makefile("rb") as stream:
+                    reply = json.loads(stream.readline(8 * 1024 * 1024))
+                if "error" in reply:
+                    raise RuntimeError(reply["error"])
+                return reply["result"]
         request = urllib.request.Request(
             url + "/" + tool,
             data=json.dumps(data).encode(),

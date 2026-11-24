@@ -31,6 +31,7 @@ export class ArkeChat extends HTMLElement {
     <form id="compose"><label>Message<textarea id="message" required maxlength="100000"></textarea></label>
       <div class="actions"><button id="send" type="submit">Send</button><label><input type="checkbox" id="interrupt"> Interrupt and redirect</label><button type="button" id="resume" hidden>Resume queue</button></div>
     </form>`;
+    this.generation = 0; this.historyGeneration = 0;
     this.$ = id => this.shadowRoot.getElementById(id);
     this.$('compose').onsubmit = e => { e.preventDefault(); this.send(); };
     this.$('resume').onclick = () => this.action('/resume', {});
@@ -39,9 +40,13 @@ export class ArkeChat extends HTMLElement {
 
   async open({ id, request, owner = false }) {
     this.disconnect();
-    this.id = id; this.request = request; this.owner = owner; this.snapshot = null; this.history = new Map();
+    this.id = id; this.request = request; this.owner = owner; this.snapshot = null; this.snapshotHistorySeen = false; this.history = new Map();
+    this.historyGeneration++; this.hasEarlier = false; this.loadingEarlier = false;
+    for (const name of ['history', 'queue', 'approvals']) this.$(name).replaceChildren();
+    for (const name of ['name', 'cwd', 'status', 'preview']) this.$(name).textContent = '';
+    this.$('send').disabled = false; this.$('earlier').hidden = true; this.$('earlier').disabled = false; this.$('resume').hidden = true;
     this.approvalsSignature = ''; this.$('error').textContent = ''; this.$('message').value = '';
-    this.$('interrupt').checked = false;
+    this.$('interrupt').checked = false; this.$('interrupt').disabled = true;
     try { this.pending = JSON.parse(sessionStorage.getItem('arke.pending.' + id) || 'null'); } catch { this.pending = null; }
     if (this.pending) { this.$('message').value = this.pending.text; this.$('send').textContent = 'Retry same message'; }
     else this.$('send').textContent = 'Send';
@@ -50,17 +55,26 @@ export class ArkeChat extends HTMLElement {
   }
 
   disconnectedCallback() { this.disconnect(); }
-  disconnect() { if (this.controller) this.controller.abort(); }
+  disconnect() { this.generation++; if (this.controller) this.controller.abort(); }
   path(suffix = '') { return '/api/conversations/' + encodeURIComponent(this.id) + suffix; }
 
   async action(suffix, body) {
+    const generation = this.generation, request = this.request, path = this.path(suffix);
     try {
-      await this.request(this.path(suffix), { method: 'POST', body: JSON.stringify(body) });
-      this.$('error').textContent = '';
-    } catch (error) { this.$('error').textContent = error.message; }
+      await request(path, { method: 'POST', body: JSON.stringify(body) });
+      if (generation === this.generation) this.$('error').textContent = '';
+    } catch (error) { if (generation === this.generation) this.$('error').textContent = error.message; }
+  }
+
+  clearStoredPending(cid, pending) {
+    try {
+      const key = 'arke.pending.' + cid, stored = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (stored?.request_id === pending.request_id) sessionStorage.removeItem(key);
+    } catch { /* memory-only */ }
   }
 
   async send() {
+    if (this.$('send').disabled) return;
     if (!this.pending) {
       const text = this.$('message').value;
       if (!text.trim()) return;
@@ -68,49 +82,57 @@ export class ArkeChat extends HTMLElement {
       try { sessionStorage.setItem('arke.pending.' + this.id, JSON.stringify(this.pending)); } catch { /* memory-only */ }
     }
     this.$('send').disabled = true;
-    const cid = this.id, pending = this.pending;
+    const cid = this.id, pending = this.pending, generation = this.generation, request = this.request, path = this.path('/messages');
     try {
-      await this.request(this.path('/messages'), { method: 'POST', body: JSON.stringify(pending) });
-      try { sessionStorage.removeItem('arke.pending.' + cid); } catch { /* memory-only */ }
-      if (cid !== this.id) return;
-      this.pending = null; this.$('message').value = ''; this.$('interrupt').checked = false;
+      await request(path, { method: 'POST', body: JSON.stringify(pending) });
+      this.clearStoredPending(cid, pending);
+      if (generation !== this.generation) return;
+      this.pending = null;
+      if (this.$('message').value === pending.text) { this.$('message').value = ''; this.$('interrupt').checked = false; }
       this.$('send').textContent = 'Send'; this.$('error').textContent = '';
     } catch (error) {
-      if (cid !== this.id) return;
+      if (generation !== this.generation) return;
       if (error.status && error.status < 500) {
         this.pending = null;
-        try { sessionStorage.removeItem('arke.pending.' + cid); } catch { /* memory-only */ }
+        this.clearStoredPending(cid, pending);
         this.$('send').textContent = 'Send';
       } else this.$('send').textContent = 'Retry same message';
       this.$('error').textContent = error.message + (this.pending ? '\nDelivery is uncertain. Retry sends the same message with the same ID.' : '');
-    } finally { if (cid === this.id) this.$('send').disabled = false; }
+    } finally { if (generation === this.generation) this.$('send').disabled = false; }
   }
 
   async follow(controller) {
-    while (!controller.signal.aborted) {
+    const generation = this.generation, request = this.request, path = this.path('/events');
+    while (!controller.signal.aborted && generation === this.generation) {
       try {
-        const response = await this.request(this.path('/events'), { signal: controller.signal, stream: true });
+        const response = await request(path, { signal: controller.signal, stream: true });
+        if (controller.signal.aborted || generation !== this.generation) { await response.body.cancel(); return; }
         const reader = response.body.getReader(), decoder = new TextDecoder();
-        let buffer = '';
-        while (!controller.signal.aborted) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let end;
-          while ((end = buffer.indexOf('\n\n')) >= 0) {
-            const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
-            const data = frame.split('\n').filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n');
-            if (data && !controller.signal.aborted) this.render(JSON.parse(data));
+        const stop = () => { reader.cancel().catch(() => {}); };
+        controller.signal.addEventListener('abort', stop, { once: true });
+        try {
+          let buffer = '';
+          while (!controller.signal.aborted) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let end;
+            while ((end = buffer.indexOf('\n\n')) >= 0) {
+              const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+              const data = frame.split('\n').filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n');
+              if (data && !controller.signal.aborted && generation === this.generation) this.render(JSON.parse(data));
+            }
           }
-        }
+        } finally { controller.signal.removeEventListener('abort', stop); await reader.cancel().catch(() => {}); reader.releaseLock(); }
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== this.generation) return;
         this.$('status').textContent = 'Disconnected. Reconnecting does not restart work.';
         if (error.status === 401 || error.status === 403) { this.$('error').textContent = error.message; return; }
       }
       if (!controller.signal.aborted) await new Promise(resolve => {
-        const timer = setTimeout(resolve, 2000);
-        controller.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+        const finish = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', finish); resolve(); };
+        const timer = setTimeout(finish, 2000);
+        controller.signal.addEventListener('abort', finish, { once: true });
       });
     }
   }
@@ -122,8 +144,17 @@ export class ArkeChat extends HTMLElement {
     this.$('status').textContent = snapshot.state + (snapshot.paused ? ' · queued messages are paused' : '');
     if (snapshot.error) this.$('error').textContent = snapshot.error;
     this.$('interrupt').disabled = !snapshot.active;
-    this.$('resume').hidden = !this.owner || !snapshot.paused || !!snapshot.active;
+    const held = snapshot.queue.some(item => item.status === 'held');
+    this.$('resume').hidden = !this.owner || !(snapshot.paused || held) || !!snapshot.active;
     this.$('preview').textContent = snapshot.preview;
+    // Keep one continuous window. A new disjoint tail must replace the old
+    // cache, otherwise backward pagination can never reach the missing middle.
+    // IDs are global across conversations, so numerical gaps prove nothing.
+    if (!this.snapshotHistorySeen || (snapshot.history.length && !snapshot.history.some(item => this.history.has(item.seq)))) {
+      this.history.clear(); this.historyGeneration++;
+      this.hasEarlier = snapshot.history.length >= 100; this.loadingEarlier = false; this.$('earlier').disabled = false;
+    }
+    this.snapshotHistorySeen = true;
     for (const item of snapshot.history) this.history.set(item.seq, item);
     this.renderHistory();
     this.$('queue').replaceChildren();
@@ -131,7 +162,7 @@ export class ArkeChat extends HTMLElement {
       const box = element('div', undefined, this.$('queue')); box.className = 'pending';
       element('b', item.status + (item.origin === 'bus' ? ' · bus notification' : ''), box);
       element('p', item.text, box);
-      if (this.owner && item.status === 'queued') {
+      if (this.owner && ['queued', 'held'].includes(item.status)) {
         element('button', 'Discard', box).onclick = () => this.action('/requests/' + encodeURIComponent(item.id) + '/discard', {});
       } else if (this.owner && item.status === 'uncertain') {
         element('p', 'Inspect the native conversation before resolving this request. It will not be replayed.', box);
@@ -156,17 +187,24 @@ export class ArkeChat extends HTMLElement {
         element('pre', JSON.stringify(item.data.details, null, 2), details);
       } else element('p', item.data.text || item.data.error || item.data.status || '', row);
     }
-    this.$('earlier').hidden = this.history.size < 100;
+    this.$('earlier').hidden = !this.hasEarlier;
     if (bottom) container.scrollTop = container.scrollHeight;
   }
 
   async earlier() {
+    if (this.loadingEarlier || !this.hasEarlier || !this.history.size) return;
+    const generation = this.generation, historyGeneration = this.historyGeneration;
+    const request = this.request, before = Math.min(...this.history.keys()), path = this.path('/history?before=' + before);
+    const current = () => generation === this.generation && historyGeneration === this.historyGeneration;
+    this.loadingEarlier = true; this.$('earlier').disabled = true;
     try {
-      const before = Math.min(...this.history.keys());
-      const result = await this.request(this.path('/history?before=' + before));
+      const result = await request(path);
+      if (!current()) return;
       for (const item of result.history) this.history.set(item.seq, item);
-      this.renderHistory(); if (!result.history.length) this.$('earlier').hidden = true;
-    } catch (error) { this.$('error').textContent = error.message; }
+      this.hasEarlier = result.history.length >= 100;
+      this.renderHistory();
+    } catch (error) { if (current()) this.$('error').textContent = error.message; }
+    finally { if (current()) { this.loadingEarlier = false; this.$('earlier').disabled = false; } }
   }
 
   renderApproval(approval) {

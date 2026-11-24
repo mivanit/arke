@@ -22,7 +22,7 @@ def test_dashboard_bus_scopes_and_paused_mail(
     monkeypatch.setattr(server, "SETTINGS", {"state_dir": str(tmp_path / "bus")})
     app = create_app(config(tmp_path / "conversations", dashboard=True), FakeAdapter)
     # The configured workspace must exist before creating the shared conversation.
-    (tmp_path / "conversations").mkdir()
+    (tmp_path / "conversations").mkdir(exist_ok=True)
     with TestClient(app) as client:
         assert 'id="managed-link" href=' in client.get("/").text
         assert client.get("/agents", headers=OWNER).status_code == 200
@@ -67,3 +67,137 @@ def test_dashboard_bus_scopes_and_paused_mail(
             == 200
         )
         assert not dashboard.bus.agents["managed-" + cid]["inbox"]
+
+
+def test_explicit_bus_config_owns_state_log_and_watch_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import json
+
+    from arke import server
+    from arke.dashboard import Dashboard
+    from arke.harnesses import Launch
+    from arke.sessions import Conversations
+
+    stale_state = tmp_path / "imported-state"
+    monkeypatch.setattr(server, "STATE_DIR", stale_state)
+    monkeypatch.setattr(server, "LOG_FILE", stale_state / "wrong.log")
+    monkeypatch.setenv("ARKE_DIR", str(stale_state))
+    monkeypatch.setenv("ARKE_LOG", str(stale_state / "wrong.log"))
+    config_file = tmp_path / "bus.toml"
+    target = tmp_path / "explicit-state"
+    config_file.write_text(
+        f'[server]\nstate_dir = "{target}"\n'
+        "stale_seconds = 42\nprocess_interval = 0.25\ntranscript_roots = []\n"
+    )
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "conversations.db",
+            {"code": Launch("codex", tmp_path)},
+            FakeAdapter,
+        )
+        dashboard = Dashboard(config(tmp_path, bus_config=config_file), manager)
+        try:
+            assert dashboard.bus.state_file == target / "state.sqlite3"
+            assert dashboard.bus.config.stale_seconds == 42
+            assert dashboard.bus.config.process_interval == 0.25
+            assert dashboard.bus.config.transcript_roots == ()
+            dashboard.bus.log("explicit-test")
+            assert (
+                json.loads((target / "log.jsonl").read_text().splitlines()[-1])["event"]
+                == "explicit-test"
+            )
+            assert not stale_state.exists()
+            events = server.dispatch(dashboard.bus, "GET", "/events", {}, {}, {})[1]
+            assert events["events"][-1]["event"] == "explicit-test"
+        finally:
+            await manager.close()
+            await dashboard.stop()
+            await dashboard.stop()
+
+    asyncio.run(scenario())
+
+
+def test_full_queue_does_not_block_startup_or_other_agent_mail(tmp_path: Path) -> None:
+    import asyncio
+
+    from arke.dashboard import Dashboard
+    from arke.harnesses import Launch
+    from arke.sessions import Conversations
+
+    config_file = tmp_path / "bus.toml"
+    config_file.write_text(f'[server]\nstate_dir = "{tmp_path / "bus"}"\n')
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "conversations.db",
+            {"code": Launch("codex", tmp_path)},
+            FakeAdapter,
+        )
+        first, second = manager.create("code"), manager.create("code")
+        manager._change(first, paused=1)
+        manager._change(second, paused=1)
+        dashboard = Dashboard(config(tmp_path, bus_config=config_file), manager)
+        try:
+            dashboard.sync_agents()
+            for n in range(100):
+                manager.submit(first, str(n), "waiting")
+            for cid in (first, second):
+                agent = dashboard.bus.agents["managed-" + cid]
+                dashboard.bus.send("human", {"to": [agent["name"]], "text": "mail"})
+            await dashboard.start()
+            assert len(manager.snapshot(first)["queue"]) == 100
+            assert len(manager.snapshot(second)["queue"]) == 1
+            assert dashboard.bus.agents["managed-" + first]["inbox"]
+            assert dashboard.bus.agents["managed-" + second]["inbox"]
+            # An agent created after startup has working tools before the next poll.
+            third = manager.create("code")
+            launch = dashboard.prepare_launch(third, manager.profiles["code"])
+            assert launch.bus_call is not None
+            launch.bus_call("list", {})
+            inbox = launch.bus_call("inbox", {})
+            assert inbox["delivery"]["ids"] == []
+        finally:
+            dashboard.stop_event.set()
+            await manager.close()
+            await dashboard.stop()
+
+    asyncio.run(scenario())
+
+
+def test_dashboard_constructor_failure_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import fcntl
+
+    from arke import server
+    from arke.dashboard import Dashboard
+    from arke.harnesses import Launch
+    from arke.sessions import Conversations
+
+    config_file = tmp_path / "bus.toml"
+    state = tmp_path / "bus"
+    config_file.write_text(f'[server]\nstate_dir = "{state}"\n')
+
+    def fail_key(values: dict[str, object]) -> str:
+        raise ValueError("invalid key")
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "conversations.db",
+            {"code": Launch("codex", tmp_path)},
+            FakeAdapter,
+        )
+        try:
+            monkeypatch.setattr(server.settings, "server_key", fail_key)
+            with pytest.raises(ValueError, match="invalid key"):
+                Dashboard(config(tmp_path, bus_config=config_file), manager)
+            with (state / "server.lock").open("a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())

@@ -1,0 +1,201 @@
+"""Real worker processes with fake native CLIs; never use a subscription or Docker."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from arke.harnesses import Event, Launch
+from arke.runner import Runner
+from tests.test_harness_adapters import CLAUDE_FIXTURE, CODEX_FIXTURE, clear_billing
+
+
+def executable(tmp_path: Path, harness: str, source: str) -> Path:
+    path = tmp_path / (harness + "-fixture")
+    path.write_text(f"#!{sys.executable}\n" + source)
+    path.chmod(0o700)
+    return path
+
+
+async def complete(runner: Runner, *, interrupt: bool = False) -> list[Event]:
+    events = []
+    async for event in runner.run("fixture turn"):
+        events.append(event)
+        if event.kind == "approval":
+            if interrupt:
+                await runner.interrupt()
+            else:
+                await runner.respond(event.data["request_id"], {"allow": True})
+    assert events[-1].kind == "completed"
+    return events
+
+
+@pytest.mark.parametrize("harness", ["codex", "claude"])
+def test_worker_subscription_protocol_control_and_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: str
+) -> None:
+    clear_billing(monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = CODEX_FIXTURE if harness == "codex" else CLAUDE_FIXTURE
+    path = executable(tmp_path, harness, source)
+
+    async def scenario() -> None:
+        launch = Launch(harness, tmp_path, executable=str(path))
+        runner = Runner(launch)
+        reference = None
+        try:
+            reference = await runner.open(None)
+            # Consecutive turns expose early terminal forwarding before the
+            # worker's previous async iterator has actually completed cleanup.
+            for _ in range(3):
+                events = await complete(runner)
+                assert any(e.kind == "message" for e in events)
+                for event in events:
+                    if event.kind == "session":
+                        reference = event.data["native_id"]
+            assert reference
+            await complete(runner, interrupt=True)
+        finally:
+            await runner.close()
+        assert runner.process is not None and runner.process.returncode is not None
+        await runner.close()
+        resumed = Runner(launch)
+        try:
+            assert await resumed.open(reference) == reference
+            await complete(resumed)
+        finally:
+            await resumed.close()
+        assert resumed.process is not None and resumed.process.returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_worker_forwards_only_injected_bus_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clear_billing(monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    # This fake native CLI exercises the same worker socket that the stdio MCP
+    # server uses, without loading a model or opening a network listener.
+    source = CODEX_FIXTURE.replace(
+        "import json, sys", "import json, sys, socket, tomllib"
+    )
+    source = source.replace(
+        "        turn += 1",
+        """        turn += 1
+        setting = next(arg for arg in sys.argv if arg.startswith("mcp_servers.arke.env="))
+        socket_path = tomllib.loads("env=" + setting.split("=", 1)[1])["env"]["ARKE_MANAGED_SOCKET"]
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(socket_path)
+            connection.sendall(json.dumps({"tool": "inbox", "data": {}}).encode() + b"\\n")
+            response = json.loads(connection.makefile("rb").readline())
+        assert response == {"result": {"message": "scoped mailbox fixture"}}, response
+""",
+    )
+    path = executable(tmp_path, "codex", source)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def bus_call(tool: str, data: dict[str, Any]) -> dict[str, str]:
+        calls.append((tool, data))
+        return {"message": "scoped mailbox fixture"}
+
+    async def scenario() -> None:
+        runner = Runner(
+            Launch("codex", tmp_path, executable=str(path), bus_call=bus_call)
+        )
+        try:
+            await runner.open(None)
+            await complete(runner)
+            assert calls == [("inbox", {})]
+        finally:
+            await runner.close()
+        assert not runner.callbacks
+
+    asyncio.run(scenario())
+
+
+def test_failed_open_still_closes_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clear_billing(monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    path = executable(
+        tmp_path,
+        "codex",
+        CODEX_FIXTURE.replace('"type": "chatgpt"', '"type": "apiKey"'),
+    )
+
+    async def scenario() -> None:
+        runner = Runner(Launch("codex", tmp_path, executable=str(path)))
+        try:
+            with pytest.raises(RuntimeError, match="subscription"):
+                await runner.open(None)
+        finally:
+            await runner.close()
+        assert runner.process is not None and runner.process.returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_close_caller_does_not_leave_worker_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clear_billing(monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    path = executable(tmp_path, "codex", CODEX_FIXTURE)
+
+    async def scenario() -> None:
+        runner = Runner(Launch("codex", tmp_path, executable=str(path)))
+        await runner.open(None)
+        closing = asyncio.create_task(runner.close())
+        await asyncio.sleep(0)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        await runner.close()
+        assert runner.process is not None and runner.process.returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_forced_close_stops_native_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clear_billing(monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    pidfile = tmp_path / "native.pid"
+    source = CODEX_FIXTURE.replace(
+        "import json, sys",
+        "import json, sys, os\nfrom pathlib import Path\nPath("
+        + repr(str(pidfile))
+        + ").write_text(str(os.getpid()))",
+    )
+    path = executable(tmp_path, "codex", source)
+
+    class NoCloseReply(Runner):
+        async def _call(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "close":
+                raise TimeoutError("fixture: worker did not acknowledge close")
+            return await super()._call(method, params)
+
+    async def scenario() -> None:
+        runner = NoCloseReply(Launch("codex", tmp_path, executable=str(path)))
+        await runner.open(None)
+        native_pid = int(pidfile.read_text())
+        await asyncio.wait_for(runner.close(), 3)
+        assert runner.process is not None and runner.process.returncode is not None
+        # A killed grandchild may briefly remain a zombie pending its OS reaper;
+        # it must never remain an executing process after the worker is closed.
+        stat = Path(f"/proc/{native_pid}/stat")
+        if stat.exists():
+            assert stat.read_text().split(")", 1)[1].split()[0] == "Z"
+        else:
+            with pytest.raises(ProcessLookupError):
+                os.kill(native_pid, 0)
+
+    asyncio.run(scenario())
