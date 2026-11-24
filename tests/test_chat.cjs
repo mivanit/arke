@@ -119,17 +119,66 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       component.render(snapshot(records(101, 200))); const gapLoading = component.earlier();
       component.render(snapshot(records(401, 500)));
       finishGap({ history: records(1, 100) }); await gapLoading;
-      const staleWindowIgnored = component.history.size === 100 && component.history.has(1000) && !component.history.has(2) && !component.$('earlier').disabled;
+      const readingWindowPreserved = component.history.size === 200 && component.history.has(2) && !component.history.has(1000) && !component.$('earlier').disabled;
+      component.latest();
+      const newTailAvailable = component.history.size === 100 && component.history.has(1000) && !component.history.has(2);
 
       component.owner = true;
       component.render({ ...snapshot(records(401, 500)), queue: [{ id: 'held', text: 'Earlier task', status: 'held', origin: 'human' }] });
       const heldControls = !component.$('resume').hidden && component.$('queue').textContent.includes('Discard');
       component.render({ ...snapshot(records(401, 500)), stopping: true, active: 'old-turn', paused: true });
       const stoppingControls = component.$('resume').hidden && component.$('interrupt').disabled && component.$('status').textContent.includes('stopping');
-      return { disjointReset, allRecovered, exhaustionPersisted, staleHistoryIgnored, staleWindowIgnored, heldControls, stoppingControls, calls };
+      return { disjointReset, allRecovered, exhaustionPersisted, staleHistoryIgnored, readingWindowPreserved, newTailAvailable, heldControls, stoppingControls, calls };
     });
     for (const [name, passed] of Object.entries(history)) if (name !== 'calls') assert.ok(passed, name);
     assert.ok(history.calls[0].endsWith('before=402'));
+    const bounded = await page.evaluate(async () => {
+      const component = document.querySelector('arke-chat');
+      const record = seq => ({ seq, kind: 'tool', data: { details: { output: 'tool ' + seq } } });
+      const state = history => ({ id: 'bounded', name: 'Agent', harness: 'codex', cwd: '/workspace', state: 'running', active: 'one', paused: false, preview: '', error: '', history, queue: [], approvals: [] });
+      await component.open({ id: 'bounded', request: async () => ({ history: [record(1)], has_earlier: false }) });
+      component.render({ ...state([record(1)]), history_mode: 'replace', has_earlier: false });
+      const details = component.$('history').querySelector('details'); details.open = true;
+      const preview = state([]); delete preview.history; preview.preview = 'another token';
+      component.render(preview);
+      const snapshotPreserved = component.snapshot.history[0].seq === 1;
+      component.render({ ...state([record(2)]), history_mode: 'append' });
+      const detailsPreserved = details.open && details === component.$('history').querySelector('details');
+      for (let seq = 3; seq <= 700; seq++) component.render({ ...state([record(seq)]), history_mode: 'append' });
+      const rowBound = component.history.size === 300 && component.rows.size === 300 && component.tail.size === 300 && component.hasEarlier;
+      await component.earlier();
+      const oldestReachable = component.history.has(1) && !component.hasEarlier && !component.$('latest').hidden;
+      component.render({ ...state([record(701)]), history_mode: 'append' });
+      const readingPreserved = component.history.has(1) && !component.history.has(701);
+      component.latest();
+      const latestReachable = component.history.has(701) && !component.history.has(1) && component.$('latest').hidden;
+
+      const heavy = seq => ({ seq, kind: 'message', data: { text: '\u0000'.repeat(1200) } });
+      component.render({ ...state([heavy(1000)]), history_mode: 'replace', has_earlier: true });
+      for (let seq = 1001; seq <= 1200; seq++) component.render({ ...state([heavy(seq)]), history_mode: 'append' });
+      const bytes = [...component.history.values()].reduce((n, r) => n + new TextEncoder().encode(JSON.stringify(r)).length, 0);
+      const byteBound = bytes <= 1024 * 1024 && component.history.size < 200;
+      component.render({ ...state([{ seq: 2000, kind: 'completed', data: { status: 'failed', error: { message: 'rate limit exceeded' } } }]), history_mode: 'replace' });
+      const readableError = component.$('history').textContent.includes('rate limit exceeded') && !component.$('history').textContent.includes('[object Object]');
+
+      const deferred = { seq: 2001, kind: 'tool', deferred: true, data: {} };
+      component.render({ ...state([deferred]), history_mode: 'append' });
+      let requested;
+      component.request = async path => { requested = path; return { kind: 'tool', data: { details: '<script>full output</script>' } }; };
+      await component.detail(deferred);
+      const fullOutput = requested.endsWith('/history/2001') && component.$('detail').open && component.$('detail-text').textContent.includes('<script>full output</script>') && !component.$('detail').querySelector('script');
+      component.$('detail').close();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const releasedOutput = component.$('detail-text').textContent === '';
+      let finish;
+      component.request = () => new Promise(resolve => { finish = resolve; });
+      const loading = component.detail(deferred);
+      await component.open({ id: 'different', request: async () => ({}) });
+      finish({ kind: 'tool', data: { details: 'stale output' } }); await loading;
+      const staleDetailIgnored = !component.$('detail').open && component.$('detail-text').textContent === '';
+      return { snapshotPreserved, detailsPreserved, rowBound, oldestReachable, readingPreserved, latestReachable, byteBound, readableError, fullOutput, releasedOutput, staleDetailIgnored };
+    });
+    for (const [name, passed] of Object.entries(bounded)) assert.ok(passed, name);
     const streams = await page.evaluate(async () => {
       const component = document.querySelector('arke-chat');
       let complete, cancelled = false;

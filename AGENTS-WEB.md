@@ -159,6 +159,19 @@ required. Arke records the conversation activity it observes; it does not import
 pre-existing native sessions into the browser. History is paginated, and event streams start
 with a snapshot so reconnects do not depend on retaining every token event.
 
+Live history pages contain at most 100 records and 256 KiB of serialized records.
+Records larger than 8 KiB are represented by a **Load full output** button; the
+original output stays in storage and is fetched through the same conversation
+authorization checks. Preview-only updates omit history, and subsequent history
+updates append new records. A client that falls behind receives a replacement
+window with backward pagination available.
+
+The chat component keeps at most 300 records and 1 MiB of serialized records in
+each of its reading and live windows. **Earlier messages** freezes the reading
+window while live updates continue separately; **Latest messages** returns to
+the current tail. Expanded tool details survive live updates. Full output opens
+one record at a time and is released when closed.
+
 Output buffers have byte and record limits. Adjacent preview-text updates can be combined;
 final messages, approvals, tool activity, session references, and completion keep their order.
 A genuinely excessive backlog fails explicitly and pauses for recovery. Approval and interrupt
@@ -306,8 +319,14 @@ limits, and only the selected workspace/native-home mounts. Worker images must b
 locally or otherwise installed first: launch does not pull an image automatically. The worker
 has no Docker socket. The selected directories must be writable by the host service's UID/GID.
 
-`compose.agent.yml` remains an owner-only example that contains the whole service and its
-native CLI together. This contains the service relative to the host; it does not separate
+`compose.agent.yml` is a **Claude-only, owner-only** example that contains the whole service and its
+native CLI together. For Codex, use the host-supervisor/container-worker deployment above:
+Arke applies Codex's external sandbox policy only to workers it starts in restricted
+containers. Merely changing the Compose profile to Codex would run its local sandbox
+inside Docker, where nested namespace creation can fail. Do not relax Docker's security
+settings to accommodate that path.
+
+The whole-service example contains the service relative to the host; it does not separate
 agent tools from administration inside that container. Use the host-supervisor/container-worker
 setup above for shared access. A remote worker scheduler is not implemented.
 
@@ -333,6 +352,12 @@ It requires Docker daemon access, the locked Python extras, Node, and Playwright
   second turn using the production external-sandbox policy. These direct native tests use
   test provider configuration; the production adapters retain their subscription-only
   authentication checks.
+* Real Claude and Codex discovery and execution of the Arke MCP tools, through the stdio
+  server, worker transport and scoped dashboard bus. A random inbox nonce must reach the
+  native model and return in a bus reply from the correct managed identity. Only native
+  initialization selects the offline test provider; production authentication is unchanged.
+  Codex MCP tool confirmations use the owner's allow-once/deny controls. Arbitrary MCP
+  elicitation forms and URL prompts are not supported and fail closed.
 * Both standalone chat and the dashboard, using real browser HTTP/SSE, session storage,
   container workers and scripted native CLIs. Checks include creation, shared access,
   approvals, interrupt/redirect, held queues, restart without automatic continuation, explicit

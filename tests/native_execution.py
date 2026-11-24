@@ -305,6 +305,10 @@ async def check() -> None:
                 f"Passed {harness} native tool execution and owner approval under production Docker restrictions.",
                 flush=True,
             )
+        from tests.native_mcp import check as mcp_check
+
+        for harness in ("claude", "codex"):
+            await mcp_check(directory / (harness + "-mcp"), harness)
 
 
 if __name__ == "__main__":

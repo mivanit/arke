@@ -2,6 +2,9 @@
 // Host supplies request(path, options), conversation ID, and whether controls are owner-only.
 const uuid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, '0')).join('');
 const element = (tag, text, parent) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (parent) parent.append(el); return el; };
+const HISTORY_ROWS = 300;
+const HISTORY_BYTES = 1024 * 1024;
+const errorText = error => typeof error === 'string' ? error : error?.message || (error ? JSON.stringify(error) : '');
 
 export class ArkeChat extends HTMLElement {
   constructor() {
@@ -23,28 +26,35 @@ export class ArkeChat extends HTMLElement {
       #queue, #approvals { margin:12px 0; } .pending { padding:12px; border:1px solid #80808055; border-radius:6px; margin:8px 0; }
       label { display:block; margin:8px 0; } label input { display:block; width:100%; }
       #preview { white-space:pre-wrap; opacity:.8; } #status { font-weight:600; }
+      dialog { max-width:min(900px,90vw); max-height:85vh; color:inherit; background:Canvas; border:1px solid #80808055; border-radius:6px; }
+      dialog pre { max-height:65vh; }
     </style>
     <h2 id="name"></h2><small id="cwd"></small><p id="status" aria-live="polite"></p>
-    <p id="error" role="alert"></p><button id="earlier" hidden>Earlier messages</button>
+    <p id="error" role="alert"></p><button id="earlier" hidden>Earlier messages</button> <button id="latest" hidden>Latest messages</button>
     <div id="history" role="log" aria-label="Conversation"></div><div id="preview"></div>
     <div id="approvals"></div><div id="queue"></div>
     <form id="compose"><label>Message<textarea id="message" required maxlength="100000"></textarea></label>
       <div class="actions"><button id="send" type="submit">Send</button><label><input type="checkbox" id="interrupt"> Interrupt and redirect</label><button type="button" id="resume" hidden>Resume queue</button></div>
-    </form>`;
+    </form><dialog id="detail"><button id="close-detail">Close</button><pre id="detail-text"></pre></dialog>`;
     this.generation = 0; this.historyGeneration = 0;
     this.$ = id => this.shadowRoot.getElementById(id);
     this.$('compose').onsubmit = e => { e.preventDefault(); this.send(); };
     this.$('resume').onclick = () => this.action('/resume', {});
     this.$('earlier').onclick = () => this.earlier();
+    this.$('latest').onclick = () => this.latest();
+    this.$('close-detail').onclick = () => this.$('detail').close();
+    this.$('detail').onclose = () => { if (!this.$('detail').open) { this.detailGeneration++; this.$('detail-text').textContent = ''; } };
   }
 
   async open({ id, request, owner = false }) {
     this.disconnect();
     this.id = id; this.request = request; this.owner = owner; this.snapshot = null; this.snapshotHistorySeen = false; this.history = new Map();
+    this.tail = new Map(); this.rows = new Map(); this.browsing = false; this.tailHasEarlier = false;
+    this.detailGeneration = (this.detailGeneration || 0) + 1; this.$('detail').close(); this.$('detail-text').textContent = '';
     this.historyGeneration++; this.hasEarlier = false; this.loadingEarlier = false;
     for (const name of ['history', 'queue', 'approvals']) this.$(name).replaceChildren();
     for (const name of ['name', 'cwd', 'status', 'preview']) this.$(name).textContent = '';
-    this.$('send').disabled = false; this.$('earlier').hidden = true; this.$('earlier').disabled = false; this.$('resume').hidden = true;
+    this.$('send').disabled = false; this.$('earlier').hidden = true; this.$('earlier').disabled = false; this.$('latest').hidden = true; this.$('resume').hidden = true;
     this.approvalsSignature = ''; this.$('error').textContent = ''; this.$('message').value = '';
     this.$('interrupt').checked = false; this.$('interrupt').disabled = true;
     try { this.pending = JSON.parse(sessionStorage.getItem('arke.pending.' + id) || 'null'); } catch { this.pending = null; }
@@ -138,7 +148,7 @@ export class ArkeChat extends HTMLElement {
   }
 
   render(snapshot) {
-    this.snapshot = snapshot;
+    this.snapshot = { ...snapshot, history: this.snapshot?.history || [] };
     this.$('name').textContent = snapshot.name;
     this.$('cwd').textContent = `${snapshot.harness} · ${snapshot.cwd} · shared files`;
     this.$('status').textContent = snapshot.state + (snapshot.stopping ? ' · stopping' : '') + (snapshot.paused ? ' · queued messages are paused' : '');
@@ -147,16 +157,10 @@ export class ArkeChat extends HTMLElement {
     const held = snapshot.queue.some(item => item.status === 'held');
     this.$('resume').hidden = !this.owner || !(snapshot.paused || held) || !!snapshot.active || !!snapshot.stopping;
     this.$('preview').textContent = snapshot.preview;
-    // Keep one continuous window. A new disjoint tail must replace the old
-    // cache, otherwise backward pagination can never reach the missing middle.
-    // IDs are global across conversations, so numerical gaps prove nothing.
-    if (!this.snapshotHistorySeen || (snapshot.history.length && !snapshot.history.some(item => this.history.has(item.seq)))) {
-      this.history.clear(); this.historyGeneration++;
-      this.hasEarlier = snapshot.history.length >= 100; this.loadingEarlier = false; this.$('earlier').disabled = false;
+    if (snapshot.history) {
+      this.updateHistory(snapshot);
+      this.snapshot.history = [...this.tail.values()].sort((a,b) => a.seq - b.seq);
     }
-    this.snapshotHistorySeen = true;
-    for (const item of snapshot.history) this.history.set(item.seq, item);
-    this.renderHistory();
     this.$('queue').replaceChildren();
     for (const item of snapshot.queue) {
       const box = element('div', undefined, this.$('queue')); box.className = 'pending';
@@ -176,16 +180,76 @@ export class ArkeChat extends HTMLElement {
     }
   }
 
+  trimHistory(history, keepLatest = true) {
+    const items = [...history.values()].sort((a,b) => keepLatest ? b.seq - a.seq : a.seq - b.seq);
+    let bytes = 0, removed = false;
+    for (const [index, item] of items.entries()) {
+      bytes += new TextEncoder().encode(JSON.stringify(item)).length;
+      if (index >= HISTORY_ROWS || bytes > HISTORY_BYTES) { history.delete(item.seq); removed = true; }
+    }
+    return removed;
+  }
+
+  updateHistory(snapshot) {
+    // Missing history means a state/preview-only update. Append frames carry
+    // new immutable records; reconnects and skipped windows replace the tail.
+    const reset = !this.snapshotHistorySeen || snapshot.history_mode === 'replace' ||
+      (!snapshot.history_mode && snapshot.history.length && !snapshot.history.some(item => this.tail.has(item.seq)));
+    if (reset) { this.tail.clear(); this.tailHasEarlier = snapshot.has_earlier ?? snapshot.history.length >= 100; }
+    for (const item of snapshot.history) this.tail.set(item.seq, item);
+    if (this.trimHistory(this.tail)) this.tailHasEarlier = true;
+    this.snapshotHistorySeen = true;
+    if (this.browsing) return;
+    if (reset) {
+      this.history.clear(); this.historyGeneration++;
+      this.hasEarlier = this.tailHasEarlier; this.loadingEarlier = false; this.$('earlier').disabled = false;
+    }
+    for (const item of snapshot.history) this.history.set(item.seq, item);
+    if (this.trimHistory(this.history)) this.hasEarlier = true;
+    this.renderHistory();
+  }
+
+  latest() {
+    this.historyGeneration++; this.browsing = false; this.loadingEarlier = false;
+    this.history = new Map(this.tail); this.hasEarlier = this.tailHasEarlier;
+    this.$('earlier').disabled = false; this.$('latest').hidden = true;
+    this.renderHistory(); this.$('history').scrollTop = this.$('history').scrollHeight;
+  }
+
+  async detail(item) {
+    const generation = this.generation, detailGeneration = ++this.detailGeneration;
+    this.$('detail-text').textContent = 'Loading…'; this.$('detail').showModal();
+    try {
+      const record = await this.request(this.path('/history/' + item.seq));
+      if (generation !== this.generation || detailGeneration !== this.detailGeneration) return;
+      this.$('detail-text').textContent = record.kind === 'tool' ? JSON.stringify(record.data.details, null, 2) :
+        record.data.text || errorText(record.data.error) || record.data.status || JSON.stringify(record.data, null, 2);
+    } catch (error) {
+      if (generation === this.generation && detailGeneration === this.detailGeneration) this.$('detail-text').textContent = error.message;
+    }
+  }
+
   renderHistory() {
     const container = this.$('history'), bottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
-    container.replaceChildren();
+    for (const [seq, row] of this.rows) {
+      if (!this.history.has(seq)) { row.remove(); this.rows.delete(seq); }
+    }
+    let previous = null;
     for (const item of [...this.history.values()].sort((a,b) => a.seq - b.seq)) {
-      const row = element('article', undefined, container); row.dataset.kind = item.kind;
-      element('small', item.kind === 'user' ? (item.data.origin === 'bus' ? 'Bus notification' : 'You') : item.kind === 'message' ? 'Agent' : item.kind, row);
-      if (item.kind === 'tool') {
-        const details = element('details', undefined, row); element('summary', 'Tool activity', details);
-        element('pre', JSON.stringify(item.data.details, null, 2), details);
-      } else element('p', item.data.text || item.data.error || item.data.status || '', row);
+      let row = this.rows.get(item.seq);
+      if (!row) {
+        row = element('article'); row.dataset.kind = item.kind; this.rows.set(item.seq, row);
+        element('small', item.kind === 'user' ? (item.data.origin === 'bus' ? 'Bus notification' : 'You') : item.kind === 'message' ? 'Agent' : item.data.status || item.kind, row);
+        if (item.deferred) {
+          element('button', 'Load full output', row).onclick = () => this.detail(item);
+        } else if (item.kind === 'tool') {
+          const details = element('details', undefined, row); element('summary', 'Tool activity', details);
+          element('pre', JSON.stringify(item.data.details, null, 2), details);
+        } else element('p', item.data.text || errorText(item.data.error) || item.data.status || '', row);
+      }
+      const next = previous ? previous.nextSibling : container.firstChild;
+      if (row !== next) container.insertBefore(row, next);
+      previous = row;
     }
     this.$('earlier').hidden = !this.hasEarlier;
     if (bottom) container.scrollTop = container.scrollHeight;
@@ -197,11 +261,13 @@ export class ArkeChat extends HTMLElement {
     const request = this.request, before = Math.min(...this.history.keys()), path = this.path('/history?before=' + before);
     const current = () => generation === this.generation && historyGeneration === this.historyGeneration;
     this.loadingEarlier = true; this.$('earlier').disabled = true;
+    this.browsing = true; this.$('latest').hidden = false;
     try {
       const result = await request(path);
       if (!current()) return;
       for (const item of result.history) this.history.set(item.seq, item);
-      this.hasEarlier = result.history.length >= 100;
+      this.trimHistory(this.history, false);
+      this.hasEarlier = result.has_earlier ?? result.history.length >= 100;
       this.renderHistory();
     } catch (error) { if (current()) this.$('error').textContent = error.message; }
     finally { if (current()) { this.loadingEarlier = false; this.$('earlier').disabled = false; } }

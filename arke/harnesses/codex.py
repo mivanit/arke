@@ -18,6 +18,18 @@ from .base import (
 from .events import READ_BATCH, EventBuffer, native_buffer
 
 
+def mcp_tool_approval(method: str, params: dict[str, Any]) -> bool:
+    """Recognize Codex's allow-once prompt, not arbitrary MCP forms or URLs."""
+    meta = params.get("_meta")
+    return (
+        method == "mcpServer/elicitation/request"
+        and params.get("mode") == "form"
+        and isinstance(meta, dict)
+        and meta.get("codex_approval_kind") == "mcp_tool_call"
+        and params.get("requestedSchema") == {"type": "object", "properties": {}}
+    )
+
+
 def subscription_config(config: dict[str, Any]) -> None:
     """Validate effective native configuration, not just the account label.
 
@@ -228,12 +240,15 @@ class Codex:
             method, params = message["method"], message.get("params", {})
             if params.get("threadId", self.thread) != self.thread:
                 continue
-            if params.get("turnId", self.turn) != self.turn:
+            if params.get("turnId", self.turn) != self.turn and not (
+                method == "mcpServer/elicitation/request"
+                and params.get("turnId") is None
+            ):
                 continue
             if "id" in message:
                 request_id = str(message["id"])
                 self.requests[request_id] = (message["id"], method, params)
-                supported = method in (
+                supported = mcp_tool_approval(method, params) or method in (
                     "item/commandExecution/requestApproval",
                     "item/fileChange/requestApproval",
                     "item/tool/requestUserInput",
@@ -310,7 +325,13 @@ class Codex:
         if request is None:
             raise ValueError("approval is no longer pending")
         native_id, method, params = request
-        if method.endswith("requestUserInput"):
+        if mcp_tool_approval(method, params):
+            # No persistence metadata: the owner grants this invocation only.
+            result = {
+                "action": "accept" if answer.get("allow") is True else "decline",
+                "content": {} if answer.get("allow") is True else None,
+            }
+        elif method.endswith("requestUserInput"):
             answers = answer.get("answers", {})
             allowed = {q["id"] for q in params.get("questions", [])}
             if (

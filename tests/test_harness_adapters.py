@@ -13,7 +13,7 @@ import pytest
 
 from arke.harnesses import Launch, SubscriptionRequired
 from arke.harnesses.base import native_reference, subscription_environment
-from arke.harnesses.codex import Codex
+from arke.harnesses.codex import Codex, mcp_tool_approval
 from tests.native_fixtures import CLAUDE_FIXTURE, CODEX_FIXTURE
 
 
@@ -200,6 +200,80 @@ def test_codex_accepts_native_default_chatgpt_backend() -> None:
             "chatgpt_base_url": "https://chatgpt.com/backend-api/",
         }
     )
+
+
+@pytest.mark.parametrize("allow", [False, True])
+@pytest.mark.parametrize("turn_id", [None, "turn-fixture"])
+def test_codex_mcp_approval_is_owner_decided_and_never_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow: bool, turn_id: str | None
+) -> None:
+    async def scenario() -> None:
+        native = Codex(Launch("codex", tmp_path))
+        native.thread = "thread-fixture"
+        writes = []
+
+        async def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            return {"turn": {"id": "turn-fixture"}}
+
+        async def write(message: dict[str, Any]) -> None:
+            writes.append(message)
+
+        monkeypatch.setattr(native, "_call", call)
+        monkeypatch.setattr(native, "_write", write)
+        params = {
+            "threadId": "thread-fixture",
+            "turnId": turn_id,
+            "serverName": "arke",
+            "mode": "form",
+            "_meta": {
+                "codex_approval_kind": "mcp_tool_call",
+                "persist": ["session", "always"],
+                "tool_name": "arke_send",
+            },
+            "requestedSchema": {"type": "object", "properties": {}},
+        }
+        native.events.put_nowait(
+            {"id": 0, "method": "mcpServer/elicitation/request", "params": params}
+        )
+        events = native.run("send a message")
+        assert (await anext(events)).kind == "started"
+        approval = await anext(events)
+        assert approval.kind == "approval" and approval.data["details"] == params
+        assert not writes, "native tool was approved before the owner decided"
+        await native.respond(approval.data["request_id"], {"allow": allow})
+        assert writes == [
+            {
+                "id": 0,
+                "result": {
+                    "action": "accept" if allow else "decline",
+                    "content": {} if allow else None,
+                },
+            }
+        ]
+        assert not native.requests
+        native.events.put_nowait(
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "turn-fixture", "status": "completed"}},
+            }
+        )
+        assert (await anext(events)).kind == "completed"
+        with pytest.raises(StopAsyncIteration):
+            await anext(events)
+        for unsupported in (
+            params | {"mode": "url"},
+            params | {"_meta": {}},
+            params
+            | {
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {"password": {"type": "string"}},
+                }
+            },
+        ):
+            assert not mcp_tool_approval("mcpServer/elicitation/request", unsupported)
+
+    asyncio.run(scenario())
 
 
 def test_raw_adapter_refuses_container_execution_settings(tmp_path: Path) -> None:

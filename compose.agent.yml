@@ -1,4 +1,6 @@
 services:
+  # Claude owner-only example. Codex uses the host-supervisor/container-worker
+  # deployment in AGENTS-WEB.md so Docker owns its sandbox boundary.
   agent:
     build:
       context: .

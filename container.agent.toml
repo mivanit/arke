@@ -1,6 +1,7 @@
 [web]
-# This whole-service deployment is owner-only. For shared chat use the host
-# supervisor with shared.agent.example.toml and separate worker containers.
+# This whole-service example supports Claude, with owner-only access.
+# For Codex or shared chat, use the host supervisor with
+# shared.agent.example.toml and separate worker containers (AGENTS-WEB.md).
 host = "0.0.0.0"
 port = 7780
 state_dir = "/state"

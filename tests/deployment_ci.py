@@ -110,6 +110,7 @@ async def image_probes(image: str, directory: Path) -> None:
         "__init__.py",
         "native_contract.py",
         "native_execution.py",
+        "native_mcp.py",
         "scripted_model.py",
     ):
         shutil.copyfile(ROOT / "tests" / name, tests / name)
@@ -133,7 +134,7 @@ runpy.run_module('tests.native_execution', run_name='__main__')
     try:
         process = await asyncio.create_subprocess_exec(*command)
         runner.process = process
-        async with asyncio.timeout(360):
+        async with asyncio.timeout(600):
             code = await process.wait()
         assert code == 0, "installed native contract/execution probe failed"
     finally:

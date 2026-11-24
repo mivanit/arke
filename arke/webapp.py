@@ -333,7 +333,12 @@ def create_app(
         cid: str, request: Request, before: int | None = None
     ) -> dict[str, Any]:
         role(request, cid=cid)
-        return {"history": app.state.conversations.history(cid, before)}
+        return app.state.conversations.history_page(cid, before)
+
+    @app.get("/api/conversations/{cid}/history/{seq}")
+    async def history_item(cid: str, seq: int, request: Request) -> dict[str, Any]:
+        role(request, cid=cid)
+        return app.state.conversations.history_item(cid, seq)
 
     @app.get("/api/conversations/{cid}/events")
     async def events(cid: str, request: Request) -> Response:
@@ -342,10 +347,16 @@ def create_app(
         rt = manager._rt(cid)
 
         async def stream() -> AsyncIterator[str]:
-            # Send a bounded recent window. Clients replace disjoint windows and page backward.
+            cursor: int | None = None
             while not manager.closed:
                 changed = rt.changed
-                snapshot = manager.snapshot(cid)
+                snapshot = manager.snapshot(cid, history_limit=0)
+                for field in ("history", "has_earlier", "history_mode"):
+                    snapshot.pop(field)
+                tail = manager.history_tail(cid)
+                if cursor is None or tail != cursor:
+                    snapshot.update(manager.history_page(cid, after=cursor or 0))
+                    cursor = tail
                 yield f"id: {snapshot['revision']}\nevent: snapshot\ndata: {json.dumps(snapshot)}\n\n"
                 try:
                     await asyncio.wait_for(changed.wait(), 15)

@@ -29,6 +29,8 @@ INTERRUPT_COMPLETION_TIMEOUT = 15.0
 SHUTDOWN_GRACE = 5.0
 CLEANUP_TIMEOUT = 30.0
 CANCEL_GRACE = 2.0
+HISTORY_PAGE_BYTES = 256 * 1024
+HISTORY_INLINE_BYTES = 8 * 1024
 
 
 class Conflict(ValueError):
@@ -280,6 +282,85 @@ class Conversations:
         ).fetchall()
         return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
 
+    def history_item(self, cid: str, seq: int) -> dict[str, Any]:
+        self._row(cid)
+        row = self.db.execute(
+            "SELECT * FROM history WHERE conversation=? AND seq=?", (cid, seq)
+        ).fetchone()
+        if row is None:
+            raise KeyError("history record not found")
+        return dict(row) | {"data": json.loads(row["data"])}
+
+    def history_tail(self, cid: str) -> int:
+        self._row(cid)
+        return self.db.execute(
+            "SELECT COALESCE(MAX(seq),0) FROM history WHERE conversation=?", (cid,)
+        ).fetchone()[0]
+
+    def history_page(
+        self,
+        cid: str,
+        before: int | None = None,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Bound inline output by bytes; full immutable records load separately.
+
+        Select summaries in SQLite so a window of large tool outputs never gets
+        materialized in Python merely to decide which ones to defer.
+        """
+        self._row(cid)
+        rows = self.db.execute(
+            "SELECT seq,conversation,request,kind,created,"
+            "length(CAST(data AS BLOB)) AS data_bytes,"
+            "CASE WHEN length(CAST(data AS BLOB))<=? THEN data END AS data "
+            "FROM history WHERE conversation=? AND seq<? AND seq>? "
+            "ORDER BY seq DESC LIMIT ?",
+            (
+                HISTORY_INLINE_BYTES,
+                cid,
+                before if before is not None else 2**63 - 1,
+                after,
+                min(max(limit, 0), 100),
+            ),
+        )
+        items: list[dict[str, Any]] = []
+        used = 2
+        for row in rows:
+            item = dict(row)
+            item["deferred"] = item["data"] is None
+            item["data"] = json.loads(item["data"]) if not item["deferred"] else {}
+            size = len(json.dumps(item).encode()) + 2
+            if used + size > HISTORY_PAGE_BYTES:
+                break
+            items.append(item)
+            used += size
+        items.reverse()
+        oldest = items[0]["seq"] if items else 0
+        has_earlier = bool(
+            oldest
+            and self.db.execute(
+                "SELECT 1 FROM history WHERE conversation=? AND seq<? LIMIT 1",
+                (cid, oldest),
+            ).fetchone()
+        )
+        # A slow observer may miss more than one bounded window. Tell it to
+        # replace the tail; backward pagination still reaches the missing middle.
+        gap = bool(
+            oldest
+            and after
+            and self.db.execute(
+                "SELECT 1 FROM history WHERE conversation=? AND seq>? AND seq<? LIMIT 1",
+                (cid, after, oldest),
+            ).fetchone()
+        )
+        return {
+            "history": items,
+            "has_earlier": has_earlier,
+            "history_mode": "replace" if not after or gap else "append",
+        }
+
     def snapshot(self, cid: str, history_limit: int = 100) -> dict[str, Any]:
         row = self._row(cid)
         # Native references and launch arguments never cross the browser API.
@@ -312,7 +393,7 @@ class Conversations:
                     (cid,),
                 )
             ],
-            "history": self.history(cid, limit=history_limit),
+            **self.history_page(cid, limit=history_limit),
         }
 
     def _record(self, cid: str, request: str, event: Event) -> None:
