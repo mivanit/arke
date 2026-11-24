@@ -1,0 +1,282 @@
+"""Codex app-server over stdio, using the user's native ChatGPT login."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+
+from .base import (
+    Event,
+    Launch,
+    SubscriptionRequired,
+    native_reference,
+    subscription_environment,
+)
+
+
+class Codex:
+    def __init__(self, launch: Launch) -> None:
+        self.launch = launch
+        self.process: asyncio.subprocess.Process | None = None
+        self.reader: asyncio.Task[None] | None = None
+        self.pending: dict[int, asyncio.Future[Any]] = {}
+        self.requests: dict[str, tuple[Any, str, dict[str, Any]]] = {}
+        self.events: asyncio.Queue[dict[str, Any] | Exception] = asyncio.Queue()
+        self.sequence = 0
+        self.thread = ""
+        self.turn = ""
+
+    async def _write(self, message: dict[str, Any]) -> None:
+        if self.process is None or self.process.stdin is None:
+            raise ConnectionError("Codex is not connected")
+        self.process.stdin.write((json.dumps(message) + "\n").encode())
+        await self.process.stdin.drain()
+
+    async def _call(self, method: str, params: dict[str, Any]) -> Any:
+        self.sequence += 1
+        number = self.sequence
+        future = asyncio.get_running_loop().create_future()
+        self.pending[number] = future
+        try:
+            await self._write({"id": number, "method": method, "params": params})
+            return await asyncio.wait_for(future, 60)
+        finally:
+            self.pending.pop(number, None)
+
+    async def _read(self) -> None:
+        assert self.process is not None and self.process.stdout is not None
+        failure: Exception = ConnectionError("Codex app-server disconnected")
+        try:
+            while line := await self.process.stdout.readline():
+                message = json.loads(line)
+                if "method" not in message:
+                    future = self.pending.get(message.get("id"))
+                    if future is not None and not future.done():
+                        if "error" in message:
+                            future.set_exception(
+                                RuntimeError(
+                                    str(
+                                        message["error"].get(
+                                            "message", "Codex request failed"
+                                        )
+                                    )
+                                )
+                            )
+                        else:
+                            future.set_result(message.get("result", {}))
+                else:
+                    # Never wait for the browser here: responses to interrupt/start use this reader too.
+                    self.events.put_nowait(message)
+        except Exception as exc:  # noqa: BLE001 — forward reader failures to the turn owner
+            failure = exc
+        finally:
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(failure)
+            self.events.put_nowait(failure)
+
+    async def open(self, native_id: str | None) -> str:
+        native_reference(native_id)
+        env = subscription_environment("codex")
+        command = [
+            self.launch.executable or "codex",
+            "app-server",
+            "--listen",
+            "stdio://",
+            "-c",
+            'forced_login_method="chatgpt"',
+            "-c",
+            'model_provider="openai"',
+        ]
+        # Owner-provided MCP tools, identically usable in standalone and dashboard apps.
+        for name, config in self.launch.mcp_servers.items():
+            if not name.replace("_", "").replace("-", "").isalnum():
+                raise ValueError("invalid MCP server name")
+            for key, value in config.items():
+                if key not in ("command", "args", "env", "url", "enabled"):
+                    raise ValueError(f"unsupported Codex MCP setting: {key}")
+                # JSON scalars/arrays also have TOML syntax; env tables need inline TOML.
+                encoded = (
+                    "{"
+                    + ", ".join(
+                        f"{json.dumps(k)} = {json.dumps(v)}" for k, v in value.items()
+                    )
+                    + "}"
+                    if isinstance(value, dict)
+                    else json.dumps(value)
+                )
+                command += ["-c", f"mcp_servers.{name}.{key}={encoded}"]
+        self.process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=self.launch.cwd,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            limit=8 * 1024 * 1024,
+        )
+        self.reader = asyncio.create_task(self._read())
+        await self._call(
+            "initialize", {"clientInfo": {"name": "arke", "version": "0.2.0"}}
+        )
+        await self._write({"method": "initialized"})
+        account = await self._call("account/read", {"refreshToken": True})
+        if (account.get("account") or {}).get("type") != "chatgpt":
+            raise SubscriptionRequired(
+                "Codex needs a ChatGPT subscription login; run codex login on the host"
+            )
+        params: dict[str, Any] = {
+            "cwd": str(self.launch.cwd),
+            "approvalPolicy": "untrusted",
+            "sandbox": "workspace-write",
+            "modelProvider": "openai",
+        }
+        if self.launch.model:
+            params["model"] = self.launch.model
+        if self.launch.instructions:
+            params["developerInstructions"] = self.launch.instructions
+        if native_id:
+            params["threadId"] = native_id
+        result = await self._call(
+            "thread/resume" if native_id else "thread/start", params
+        )
+        self.thread = native_reference(result["thread"]["id"]) or ""
+        # An explicit resume must not attach and submit into someone else's running turn.
+        if any(
+            t.get("status") == "inProgress" for t in result["thread"].get("turns", [])
+        ):
+            raise RuntimeError(
+                "native conversation still has an active turn; inspect it before resuming"
+            )
+        return self.thread
+
+    async def run(self, text: str) -> AsyncIterator[Event]:
+        result = await self._call(
+            "turn/start",
+            {
+                "threadId": self.thread,
+                "input": [{"type": "text", "text": text}],
+            },
+        )
+        self.turn = result["turn"]["id"]
+        yield Event("started", {"turn_id": self.turn})
+        while True:
+            message = await self.events.get()
+            if isinstance(message, Exception):
+                raise message
+            method, params = message["method"], message.get("params", {})
+            if params.get("threadId", self.thread) != self.thread:
+                continue
+            if params.get("turnId", self.turn) != self.turn:
+                continue
+            if "id" in message:
+                request_id = str(message["id"])
+                self.requests[request_id] = (message["id"], method, params)
+                supported = method in (
+                    "item/commandExecution/requestApproval",
+                    "item/fileChange/requestApproval",
+                    "item/tool/requestUserInput",
+                )
+                if supported:
+                    yield Event(
+                        "approval",
+                        {
+                            "request_id": request_id,
+                            "kind": "input"
+                            if method.endswith("requestUserInput")
+                            else "permission",
+                            "details": params,
+                        },
+                    )
+                else:
+                    # Unknown protocol requests must fail closed, not hang the native reader.
+                    await self._write(
+                        {
+                            "id": message["id"],
+                            "error": {
+                                "code": -32601,
+                                "message": "This request is not supported by Arke",
+                            },
+                        }
+                    )
+                    self.requests.pop(request_id, None)
+                    yield Event(
+                        "notice", {"text": f"Unsupported native request: {method}"}
+                    )
+            elif method == "serverRequest/resolved":
+                request_id = str(params.get("requestId"))
+                self.requests.pop(request_id, None)
+                yield Event("approval_resolved", {"request_id": request_id})
+            elif method == "item/agentMessage/delta":
+                yield Event("delta", {"text": params.get("delta", "")})
+            elif method == "item/completed":
+                item = params.get("item", {})
+                if item.get("type") == "agentMessage":
+                    yield Event("message", {"text": item.get("text", "")})
+                elif item.get("type") in (
+                    "commandExecution",
+                    "fileChange",
+                    "mcpToolCall",
+                ):
+                    yield Event("tool", {"details": item})
+            elif (
+                method == "turn/completed"
+                and params.get("turn", {}).get("id") == self.turn
+            ):
+                turn = params["turn"]
+                self.turn = ""
+                self.requests.clear()
+                yield Event(
+                    "completed",
+                    {
+                        "status": turn.get("status", "failed"),
+                        "error": turn.get("error"),
+                    },
+                )
+                return
+
+    async def interrupt(self) -> None:
+        if not self.turn:
+            raise RuntimeError("turn has not started yet")
+        await self._call(
+            "turn/interrupt", {"threadId": self.thread, "turnId": self.turn}
+        )
+
+    async def respond(self, request_id: str, answer: dict[str, Any]) -> None:
+        request = self.requests.get(request_id)
+        if request is None:
+            raise ValueError("approval is no longer pending")
+        native_id, method, params = request
+        if method.endswith("requestUserInput"):
+            answers = answer.get("answers", {})
+            allowed = {q["id"] for q in params.get("questions", [])}
+            if (
+                not isinstance(answers, dict)
+                or set(answers) != allowed
+                or any(not isinstance(v, str) for v in answers.values())
+            ):
+                raise ValueError("answer each requested question")
+            result = {"answers": {k: {"answers": [v]} for k, v in answers.items()}}
+        else:
+            result = {
+                "decision": "accept" if answer.get("allow") is True else "decline"
+            }
+        await self._write({"id": native_id, "result": result})
+        self.requests.pop(request_id, None)
+
+    async def close(self) -> None:
+        if self.process is not None and self.process.returncode is None:
+            if self.process.stdin:
+                self.process.stdin.close()
+            try:
+                await asyncio.wait_for(self.process.wait(), 5)
+            except TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        if self.reader is not None:
+            self.reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.reader

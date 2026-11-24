@@ -57,30 +57,71 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, Never, TextIO
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
-import checkpoints
-import client  # shared settings (same folder)
-import roster
-import settings
-from client import printable
-from procs import cmdline, proc_table, process_info
-from storage import Agent, Message, Store
-from transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
-from wake import (
-    TMUX_TIMEOUT_S,
-    CodexRefused,
-    WakeCancelled,
-    codex_turn,
-    harness_in_pane,
-    prompt_box,
-    squash,
-    tmux_run,
-    turn_marker,
-    type_notice,
-    wake_notice,
-)
+if __package__:
+    from . import checkpoints
+else:
+    import checkpoints
+if __package__:
+    from . import client
+else:
+    import client  # shared settings (same folder)
+if __package__:
+    from . import roster
+else:
+    import roster
+if __package__:
+    from . import settings
+else:
+    import settings
+if __package__:
+    from .client import printable
+else:
+    from client import printable
+if __package__:
+    from .procs import cmdline, proc_table, process_info
+else:
+    from procs import cmdline, proc_table, process_info
+if __package__:
+    from .storage import Agent, Message, Store
+else:
+    from storage import Agent, Message, Store
+if __package__:
+    from .transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
+else:
+    from transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
+if __package__:
+    from .wake import (
+        TMUX_TIMEOUT_S,
+        CodexRefused,
+        WakeCancelled,
+        codex_turn,
+        harness_in_pane,
+        prompt_box,
+        squash,
+        tmux_run,
+        turn_marker,
+        type_notice,
+        wake_notice,
+    )
+else:
+    from wake import (
+        TMUX_TIMEOUT_S,
+        CodexRefused,
+        WakeCancelled,
+        codex_turn,
+        harness_in_pane,
+        prompt_box,
+        squash,
+        tmux_run,
+        turn_marker,
+        type_notice,
+        wake_notice,
+    )
 
 HERE: Path = Path(__file__).resolve().parent  # <clone>/arke
-WEB: Path = HERE.parent / "web"  # the console and analytics pages, read per request
+WEB: Path = (
+    HERE / "web" if (HERE / "web").is_dir() else HERE.parent / "web"
+)  # installed package or source checkout; read per request
 ASSETS: Path = (
     HERE.parent / ".local/web"
 )  # downloaded by install-service.py, not checked into Git
@@ -468,6 +509,11 @@ class Bus:
 
     def reachable(self, a: Agent) -> tuple[str, str]:
         """("yes" | "gone" | "stale", why). Only what we can actually check; unknown counts as reachable."""
+        if a.get("managed"):
+            return (
+                "yes",
+                "queue paused" if a.get("managed_paused") else "managed conversation",
+            )
         if a["state"] == "offline":
             return "yes", ""
         if a.get("host") == LOCAL_HOST and a.get("tmux") and not pane_alive(a["tmux"]):
@@ -2798,11 +2844,14 @@ class Bus:
         return read_transcript(Path(path), msgs, cursor, limit, before)
 
 
-def watch_agents(bus: Bus) -> None:
+def watch_agents(bus: Bus, stop: threading.Event | None = None) -> None:
     """Every WAKE_PASS_S: busy/idle from transcripts, then wake-ups for idle agents with mail. A failure is logged
     and the loop carries on (it is what keeps agents from sitting on unread mail)."""
     while True:
-        time.sleep(WAKE_PASS_S)
+        if stop is None:
+            time.sleep(WAKE_PASS_S)
+        elif stop.wait(WAKE_PASS_S):
+            return
         for step in (
             bus.forget_old,
             bus.turn_pass,
@@ -2820,7 +2869,7 @@ def watch_agents(bus: Bus) -> None:
                 )
 
 
-def sample_procs(bus: Bus) -> None:
+def sample_procs(bus: Bus, stop: threading.Event | None = None) -> None:
     """Every PROC_S seconds: each local agent's process tree (its harness pid and descendants) -> one `procs` event:
     per-agent totals and busiest processes, plus processes that started or ended since the last sample."""
     hz: int = os.sysconf("SC_CLK_TCK")
@@ -2830,7 +2879,10 @@ def sample_procs(bus: Bus) -> None:
     known: dict[tuple[int, int], str] = {}  # (pid, start) -> agent, for "ended"
     last: float = time.time()
     while True:
-        time.sleep(PROC_S)
+        if stop is None:
+            time.sleep(PROC_S)
+        elif stop.wait(PROC_S):
+            return
         try:
             procs: dict[int, dict[str, Any]] = proc_table()
         except OSError as e:  # e.g. a transient /proc permission error: printed, and the next sample tries again
@@ -3180,6 +3232,191 @@ class BusHTTPServer(ThreadingHTTPServer):
     request_queue_size: int = 128
 
 
+def dispatch(
+    bus: Bus,
+    method: str,
+    path: str,
+    query: dict[str, list[str]],
+    body: dict[str, Any],
+    headers: Any,
+) -> tuple[int, Any, str]:
+    """Shared bus routes for the original HTTP server and the optional ASGI dashboard.
+
+    The caller authenticates and bounds the body before dispatching. Bus identity and
+    helper restrictions remain here so all HTTP frontends use the same rules.
+    """
+    sid, as_name = headers.get("X-Agent-Session", ""), headers.get("X-Agent-As", "")
+    helper, tmux = headers.get("X-Agent-Helper", ""), headers.get("X-Agent-Tmux", "")
+    if helper:
+        if not sid or not HELPER_RE.fullmatch(helper):
+            raise HttpError(
+                400, "helper requests require a parent session and a valid helper ID"
+            )
+        if method != "GET" and not (
+            method == "POST" and path in ("/send", "/helper/send")
+        ):
+            raise HttpError(
+                403, "sub-agents have read-only access; sends go only to their parent"
+            )
+    page = PAGES.get(path) if method == "GET" else None
+    q = {k: v[0] for k, v in query.items()}
+    parts = [unquote(p) for p in path.strip("/").split("/")]
+    if page is not None:  # read per request: iterate on the pages without restarting
+        f: Path = (ASSETS if path.startswith("/vendor/") else WEB) / page
+        if not f.is_file():
+            raise HttpError(
+                404,
+                f"{page} missing (vendored files: run python3 install-service.py --assets-only)",
+            )
+        return (
+            200,
+            f.read_bytes(),
+            f"{mimetypes.guess_type(page)[0]}; charset=utf-8",
+        )
+    match method, parts:
+        case "GET", ["help"]:
+            text: str = (
+                (HERE / "help.md")
+                .read_text()
+                .replace("{client}", "<clone>/arke/client.py")
+                .replace("{dir}", "<clone>/arke")
+            )
+            return (200, text.encode(), "text/plain; charset=utf-8")
+        case "GET", ["git"]:
+            cwd: Path | None = bus.local_path(q.get("cwd", ""))
+            if cwd is None or not cwd.is_dir():
+                raise HttpError(
+                    400,
+                    f"cwd must be a local agent's working directory (or inside one) on {LOCAL_HOST}",
+                )
+            out = git_log(
+                cwd,
+                float(q.get("since", 0)),
+                max(1, min(int(q.get("limit", 200)), 2000)),
+            )
+        case "GET", [
+            "machine"
+        ]:  # the bus host's size, for scaling per-process shares in analytics
+            mem_kb: int = int(
+                Path("/proc/meminfo").read_text().split()[1]
+            )  # first line: MemTotal: N kB
+            out = {
+                "host": LOCAL_HOST,
+                "cores": os.cpu_count(),
+                "mem_total_mb": mem_kb // 1024,
+            }
+        case "GET", ["horatio", "history"]:
+            if not HORATIO_URL:
+                raise HttpError(
+                    404,
+                    "horatio is not configured (set [server].horatio_url)",
+                )
+            try:
+                with urllib.request.urlopen(
+                    f"{HORATIO_URL}/api/history?hours={float(q.get('hours', 6))}",
+                    timeout=20,
+                ) as r:
+                    if r.headers.get_content_type() != "application/json":
+                        raise HttpError(
+                            502,
+                            f"{HORATIO_URL} answered {r.headers.get_content_type()}, not horatio's JSON",
+                        )
+                    return (200, r.read(), "application/json")
+            except OSError as e:
+                raise HttpError(
+                    502, f"horatio at {HORATIO_URL} unreachable: {e}"
+                ) from e
+        case "GET", ["fileinfo"]:
+            out = bus.file_info(q.get("path", ""))
+        case "GET", ["filesizes"]:
+            out = bus.file_sizes(query.get("path", []))
+        case "GET", ["events"]:
+            if q.get("procs", "") not in ("", "totals"):
+                raise HttpError(400, "procs must be totals or absent")
+            from_ts: float | None = float(q["from"]) if "from" in q else None
+            if from_ts is not None and not math.isfinite(from_ts):
+                raise HttpError(400, "from must be a finite time")
+            out = read_events(
+                max(0, int(q.get("since", 0))),
+                set(filter(None, q.get("type", "").split(","))),
+                max(1, min(int(q.get("limit", 5000)), 50000)),
+                q.get("generation", ""),
+                q.get("procs") == "totals",
+                from_ts,
+            )
+        case "POST", ["hook"]:
+            out = bus.hook(body)
+        case "GET", ["agents"]:
+            out = bus.list_agents(q.get("project", ""))
+        case "GET", ["roster"]:
+            if any(q.get(flag, "0") not in ("0", "1") for flag in ("global", "all")):
+                raise HttpError(400, "global and all must be 0 or 1")
+            out = bus.roster(
+                sid,
+                as_name,
+                tmux,
+                project=q.get("project", ""),
+                global_scope=q.get("global") == "1",
+                show_all=q.get("all") == "1",
+            )
+        case "GET", ["agents", name]:
+            with bus.cond:
+                a: Agent | None = bus.by_name(name)
+                if a is None:
+                    raise HttpError(404, f"no agent named {name!r}")
+                snapshot: dict[str, Any] = copy.deepcopy(a)
+            out = bus.public(snapshot)
+        case "GET", ["agents", name, "transcript"]:
+            out = bus.transcript(
+                name,
+                q.get("cursor", ""),
+                max(1, min(int(q.get("limit", 40)), 500)),
+                q.get("before", ""),
+            )
+        case "GET", ["projects"]:
+            out = bus.project_tree()
+        case "POST", ["projects"]:
+            out = bus.projects(sid, as_name, body, tmux)
+        case "GET", ["resolve"]:
+            to: list[str] = [t.strip() for t in q.get("to", "").split(",") if t.strip()]
+            with bus.cond:
+                out = bus.resolve(to, bus.sender(sid, as_name or "human"))
+            out["unreachable"] = bus.unreachable(out["reach"])
+        case "POST", ["send"] | ["helper", "send"]:
+            if parts == ["helper", "send"] and not helper:
+                raise HttpError(400, "helper sends require X-Agent-Helper")
+            out = bus.send(
+                as_name,
+                body | {"via": headers.get("X-Agent-Via", "")},
+                sid=sid,
+                tmux=tmux,
+                helper=helper,
+            )
+        case "GET", ["inbox"]:
+            out = bus.inbox(
+                bus.agent_for(sid, as_name, tmux),
+                float(q.get("wait", 0)),
+                bool(helper) or q.get("receipt") == "1",
+            )
+            if helper:
+                out.pop("delivery", None)
+        case "POST", ["ack"]:
+            out = bus.acknowledge(sid, as_name, body, tmux)
+        case "POST", ["wake", "wait"]:
+            out = bus.wake_wait(sid, body)
+        case "GET", ["log"]:
+            out = bus.log_view(q)
+        case "POST", ["about"]:
+            out = bus.update(sid, as_name, body, tmux)
+        case "POST", ["name"]:
+            out = bus.rename(sid, as_name, body, tmux)
+        case "POST", ["color"]:
+            out = bus.set_color(body)
+        case _:
+            raise HttpError(404, f"no route {method} {path} (see /help)")
+    return 200, out, "application/json"
+
+
 class Handler(BaseHTTPRequestHandler):
     # HTTP/1.0, the default protocol_version: one request per connection, so the unread body of a refused
     # request is never read as the next one. Keep it unless every early reply drains or closes.
@@ -3214,11 +3451,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self, method: str) -> None:
         sid: str = self.headers.get("X-Agent-Session", "")
-        as_name: str = self.headers.get("X-Agent-As", "")
         helper: str = self.headers.get("X-Agent-Helper", "")
-        tmux: str = self.headers.get(
-            "X-Agent-Tmux", ""
-        )  # caller's pane; must match the session's (see sender)
         bus: Bus = self.bus
         try:
             url: ParseResult = urlparse(self.path)
@@ -3267,7 +3500,6 @@ class Handler(BaseHTTPRequestHandler):
                         },
                     )
             query: dict[str, list[str]] = parse_qs(url.query)
-            q: dict[str, str] = {k: v[0] for k, v in query.items()}
             if helper:
                 if not sid or not HELPER_RE.fullmatch(helper):
                     raise HttpError(
@@ -3311,171 +3543,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("body must be a JSON object")
                 # JSON can spell a lone surrogate ("\\ud800"); it can't be saved, logged or served, so refuse it here
                 json.dumps(body, ensure_ascii=False).encode()
-            parts: list[str] = [unquote(p) for p in url.path.strip("/").split("/")]
         except HttpError as e:
             return self.reply(e.status, {"error": str(e)})
         except ValueError as e:
             return self.reply(400, {"error": f"bad request: {e}"})
         try:
-            if (
-                page is not None
-            ):  # read per request: iterate on the pages without restarting
-                f: Path = (ASSETS if url.path.startswith("/vendor/") else WEB) / page
-                if not f.is_file():
-                    raise HttpError(
-                        404,
-                        f"{page} missing (vendored files: run python3 install-service.py --assets-only)",
-                    )
-                return self.reply(
-                    200,
-                    f.read_bytes(),
-                    f"{mimetypes.guess_type(page)[0]}; charset=utf-8",
-                )
-            match method, parts:
-                case "GET", ["help"]:
-                    text: str = (
-                        (HERE / "help.md")
-                        .read_text()
-                        .replace("{client}", "<clone>/arke/client.py")
-                        .replace("{dir}", "<clone>/arke")
-                    )
-                    return self.reply(200, text.encode(), "text/plain; charset=utf-8")
-                case "GET", ["git"]:
-                    cwd: Path | None = bus.local_path(q.get("cwd", ""))
-                    if cwd is None or not cwd.is_dir():
-                        raise HttpError(
-                            400,
-                            f"cwd must be a local agent's working directory (or inside one) on {LOCAL_HOST}",
-                        )
-                    out = git_log(
-                        cwd,
-                        float(q.get("since", 0)),
-                        max(1, min(int(q.get("limit", 200)), 2000)),
-                    )
-                case "GET", [
-                    "machine"
-                ]:  # the bus host's size, for scaling per-process shares in analytics
-                    mem_kb: int = int(
-                        Path("/proc/meminfo").read_text().split()[1]
-                    )  # first line: MemTotal: N kB
-                    out = {
-                        "host": LOCAL_HOST,
-                        "cores": os.cpu_count(),
-                        "mem_total_mb": mem_kb // 1024,
-                    }
-                case "GET", ["horatio", "history"]:
-                    if not HORATIO_URL:
-                        raise HttpError(
-                            404,
-                            "horatio is not configured (set [server].horatio_url)",
-                        )
-                    try:
-                        with urllib.request.urlopen(
-                            f"{HORATIO_URL}/api/history?hours={float(q.get('hours', 6))}",
-                            timeout=20,
-                        ) as r:
-                            if r.headers.get_content_type() != "application/json":
-                                raise HttpError(
-                                    502,
-                                    f"{HORATIO_URL} answered {r.headers.get_content_type()}, not horatio's JSON",
-                                )
-                            return self.reply(200, r.read(), "application/json")
-                    except OSError as e:
-                        raise HttpError(
-                            502, f"horatio at {HORATIO_URL} unreachable: {e}"
-                        ) from e
-                case "GET", ["fileinfo"]:
-                    out = bus.file_info(q.get("path", ""))
-                case "GET", ["filesizes"]:
-                    out = bus.file_sizes(query.get("path", []))
-                case "GET", ["events"]:
-                    if q.get("procs", "") not in ("", "totals"):
-                        raise HttpError(400, "procs must be totals or absent")
-                    from_ts: float | None = float(q["from"]) if "from" in q else None
-                    if from_ts is not None and not math.isfinite(from_ts):
-                        raise HttpError(400, "from must be a finite time")
-                    out = read_events(
-                        max(0, int(q.get("since", 0))),
-                        set(filter(None, q.get("type", "").split(","))),
-                        max(1, min(int(q.get("limit", 5000)), 50000)),
-                        q.get("generation", ""),
-                        q.get("procs") == "totals",
-                        from_ts,
-                    )
-                case "POST", ["hook"]:
-                    out = bus.hook(body)
-                case "GET", ["agents"]:
-                    out = bus.list_agents(q.get("project", ""))
-                case "GET", ["roster"]:
-                    if any(
-                        q.get(flag, "0") not in ("0", "1") for flag in ("global", "all")
-                    ):
-                        raise HttpError(400, "global and all must be 0 or 1")
-                    out = bus.roster(
-                        sid,
-                        as_name,
-                        tmux,
-                        project=q.get("project", ""),
-                        global_scope=q.get("global") == "1",
-                        show_all=q.get("all") == "1",
-                    )
-                case "GET", ["agents", name]:
-                    with bus.cond:
-                        a: Agent | None = bus.by_name(name)
-                        if a is None:
-                            raise HttpError(404, f"no agent named {name!r}")
-                        snapshot: dict[str, Any] = copy.deepcopy(a)
-                    out = bus.public(snapshot)
-                case "GET", ["agents", name, "transcript"]:
-                    out = bus.transcript(
-                        name,
-                        q.get("cursor", ""),
-                        max(1, min(int(q.get("limit", 40)), 500)),
-                        q.get("before", ""),
-                    )
-                case "GET", ["projects"]:
-                    out = bus.project_tree()
-                case "POST", ["projects"]:
-                    out = bus.projects(sid, as_name, body, tmux)
-                case "GET", ["resolve"]:
-                    to: list[str] = [
-                        t.strip() for t in q.get("to", "").split(",") if t.strip()
-                    ]
-                    with bus.cond:
-                        out = bus.resolve(to, bus.sender(sid, as_name or "human"))
-                    out["unreachable"] = bus.unreachable(out["reach"])
-                case "POST", ["send"] | ["helper", "send"]:
-                    if parts == ["helper", "send"] and not helper:
-                        raise HttpError(400, "helper sends require X-Agent-Helper")
-                    out = bus.send(
-                        as_name,
-                        body | {"via": self.headers.get("X-Agent-Via", "")},
-                        sid=sid,
-                        tmux=tmux,
-                        helper=helper,
-                    )
-                case "GET", ["inbox"]:
-                    out = bus.inbox(
-                        bus.agent_for(sid, as_name, tmux),
-                        float(q.get("wait", 0)),
-                        bool(helper) or q.get("receipt") == "1",
-                    )
-                    if helper:
-                        out.pop("delivery", None)
-                case "POST", ["ack"]:
-                    out = bus.acknowledge(sid, as_name, body, tmux)
-                case "POST", ["wake", "wait"]:
-                    out = bus.wake_wait(sid, body)
-                case "GET", ["log"]:
-                    out = bus.log_view(q)
-                case "POST", ["about"]:
-                    out = bus.update(sid, as_name, body, tmux)
-                case "POST", ["name"]:
-                    out = bus.rename(sid, as_name, body, tmux)
-                case "POST", ["color"]:
-                    out = bus.set_color(body)
-                case _:
-                    raise HttpError(404, f"no route {method} {url.path} (see /help)")
+            status, out, ctype = dispatch(
+                bus, method, url.path, query, body, self.headers
+            )
+            return self.reply(status, out, ctype)
         except HttpError as e:
             return self.reply(e.status, {"error": str(e)})
         except (KeyError, ValueError, OverflowError) as e:
@@ -3487,7 +3563,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 — a server bug: printed with its traceback, and answered (not a dropped connection)
             traceback.print_exc()
             return self.reply(500, {"error": f"server error: {type(e).__name__}: {e}"})
-        self.reply(200, out)
 
     def do_GET(self) -> None:
         self.route("GET")

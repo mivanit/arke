@@ -19,8 +19,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import client  # shared settings (same folder)
-import settings
+if __package__:
+    from . import client
+else:
+    import client  # shared settings (same folder)
+if __package__:
+    from . import settings
+else:
+    import settings
 
 TRANSCRIPT_TAIL_BYTES: int = 2_000_000
 MAX_TEXT: int = (

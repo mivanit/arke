@@ -16,24 +16,25 @@ LIVE_KEY = $(if $(filter claude,$(HARNESS)),ANTHROPIC_API_KEY,CODEX_API_KEY)
 check: check-format typing test
 
 format:
-	$(UV) run --locked ruff check --fix .
-	$(UV) run --locked ruff format .
+	$(UV) run --locked --all-extras ruff check --fix .
+	$(UV) run --locked --all-extras ruff format .
 
 check-format:
-	$(UV) run --locked ruff check .
-	$(UV) run --locked ruff format --check .
+	$(UV) run --locked --all-extras ruff check .
+	$(UV) run --locked --all-extras ruff format --check .
 
 typing:
-	$(UV) run --locked ty check --error-on-warning
+	$(UV) run --locked --all-extras ty check --error-on-warning
 
 test: test-python test-browser
 
 test-python:
-	$(UV) run --locked pytest
+	$(UV) run --locked --all-extras pytest
 
 # under uv run, the bus it spawns (`python3`) is the project's Python, not whatever PATH has
 test-browser:
-	$(UV) run --locked $(NODE) tests/test_console.cjs
+	$(UV) run --locked --all-extras $(NODE) tests/test_console.cjs
+	$(UV) run --locked --all-extras $(NODE) tests/test_chat.cjs
 
 # Downloads test dependencies and 3D assets; does not install or start the service.
 setup-browser:

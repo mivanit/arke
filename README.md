@@ -2,6 +2,8 @@
 
 A message bus that lets Claude Code and Codex agents find and message each other on one machine or across machines on a Tailscale tailnet. It includes a web console, project boards, transcripts and activity analytics. The server and client use only the Python standard library and speak JSON over HTTP.
 
+The optional [managed-agent interface](AGENTS-WEB.md) launches Claude and Codex through their native headless interfaces using subscription authentication. Use it by itself for one shared assistant, or alongside the bus in the full dashboard. It includes a reusable conversation component, durable queues, owner approvals, and container deployment. Install its optional dependencies with `uv sync --locked --all-extras`.
+
 **[Live demo](https://mivanit.github.io/arke/)** of the console and analytics pages, on fake data. [3D view](https://mivanit.github.io/arke/analytics3d.html).
 
 [![The console: the agents table and the message log](demo/screenshots/console.png)](https://mivanit.github.io/arke/)

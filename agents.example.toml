@@ -1,0 +1,29 @@
+# Paths are relative to this file. This app does not load the bus unless dashboard=true.
+[web]
+host = "127.0.0.1"
+port = 7780
+state_dir = ".local/conversations"
+allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
+title = "Arke agents"
+# dashboard = true
+# bus_config = ".local/config.toml"
+
+# A standalone shared assistant uses one conversation for every connected browser:
+# shared_profile = "claude"
+# chat_key_file = ".local/conversations/chat.key"
+# To serve a LAN, set host="0.0.0.0" and add the machine's actual IP/name to allowed_hosts.
+
+[profiles.claude]
+harness = "claude"
+cwd = "."
+instructions = ""
+
+[profiles.codex]
+harness = "codex"
+cwd = "."
+instructions = ""
+
+# Application-owned tools are ordinary MCP servers, available without the bus:
+# [profiles.claude.mcp_servers.household]
+# command = "/absolute/path/to/python"
+# args = ["/absolute/path/to/database_tools.py"]

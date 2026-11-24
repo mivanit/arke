@@ -13,7 +13,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 WORKDIR /arke
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY pyproject.toml uv.lock package.json package-lock.json ./
-RUN uv sync --locked && npm ci && npx playwright install --with-deps chromium
+RUN uv sync --locked --all-extras --no-install-project && npm ci && npx playwright install --with-deps chromium
 COPY . .
-RUN python3 install-service.py --assets-only
+RUN uv sync --locked --all-extras && python3 install-service.py --assets-only
 CMD ["make", "check"]
