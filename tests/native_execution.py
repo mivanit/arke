@@ -49,6 +49,13 @@ class CommandModel(ScriptedModel):
         if len(self.requests) > 6:
             raise ValueError("unexpected extra model request")
         history = body.get("messages", body.get("input", []))
+        # A new user turn starts a new command, even when this thread includes
+        # earlier denied/approved tool results. Claude's user tool-result block
+        # also works as the start of this slice.
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].get("role") == "user":
+                history = history[index:]
+                break
         for message in history:
             if message.get("type") in (
                 "function_call_output",
@@ -61,14 +68,15 @@ class CommandModel(ScriptedModel):
             ):
                 return None
         self.actions.append("execute marker command")
+        call_id = f"call_marker_{len(self.actions)}"
         if "messages" in body:
             return {
-                "id": "call_marker",
+                "id": call_id,
                 "name": "Bash",
                 "arguments": {"command": self.command},
             }
         return {
-            "id": "call_marker",
+            "id": call_id,
             "name": "exec",
             "namespace": "functions",
             "arguments": "text(await tools.exec_command("
@@ -88,7 +96,7 @@ async def codex_command(root: Path, model: CommandModel) -> int:
     )
     # Reuse event/approval translation, but explicitly initialize the test provider.
     # Codex.open() remains subscription-only and is tested separately with fixtures.
-    native = Codex(Launch("codex", root))
+    native = Codex(Launch("codex", root), external_sandbox=True)
     approvals = 0
     try:
         native.process = await asyncio.create_subprocess_exec(
@@ -114,17 +122,27 @@ async def codex_command(root: Path, model: CommandModel) -> int:
                 "model": "gpt-6.1-sol",
                 "modelProvider": "arke_fixture",
                 "approvalPolicy": "untrusted",
+                "approvalsReviewer": "user",
                 "sandbox": "workspace-write",
             },
         )
         native.thread = result["thread"]["id"]
-        async for event in native.run("Execute the fixture command, then finish."):
-            if event.kind == "approval":
-                assert event.data["details"]["command"], event
-                approvals += 1
-                await native.respond(event.data["request_id"], {"allow": True})
-            if event.kind == "completed":
-                assert event.data["status"] == "completed", event
+        for allow in (False, True):
+            before = approvals
+            async for event in native.run("Execute the fixture command, then finish."):
+                if event.kind == "approval":
+                    assert event.data["details"]["command"], event
+                    assert not (root / "executed.txt").exists(), (
+                        "command ran before approval"
+                    )
+                    approvals += 1
+                    await native.respond(event.data["request_id"], {"allow": allow})
+                if event.kind == "completed":
+                    assert event.data["status"] == "completed", event
+            assert approvals > before, "external sandbox bypassed owner approval"
+            assert (root / "executed.txt").exists() == allow, (
+                "owner decision was not enforced"
+            )
     finally:
         await native.close()
     return approvals

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from arke.harnesses import Launch
 from arke.runner import Runner, validate_isolation
 from arke.webapp import create_app
+from arke.webconfig import load
 from tests.test_conversation_web import OWNER, config
 from tests.test_sessions import FakeAdapter
 
@@ -50,6 +51,15 @@ def test_container_command_only_mounts_selected_directories(tmp_path: Path) -> N
         "docker.sock" in arg or "--privileged" in arg or "network=host" in arg
         for arg in command
     )
+
+
+def test_profile_cannot_request_external_sandbox(tmp_path: Path) -> None:
+    settings = tmp_path / "agent.toml"
+    settings.write_text(
+        '[profiles.test]\nharness="codex"\ncwd="."\nexternal_sandbox=true\n'
+    )
+    with pytest.raises(ValueError, match="unknown settings: external_sandbox"):
+        load(settings)
 
 
 def test_shared_profile_cannot_create_private_native_history(tmp_path: Path) -> None:

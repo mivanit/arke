@@ -272,6 +272,15 @@ async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None
         for line in (workspace / "protocol.jsonl").read_text().splitlines()
     ]
     if harness == "codex":
+        turns = [r["params"] for r in records if r.get("method") == "turn/start"]
+        assert turns
+        assert all(
+            turn["sandboxPolicy"]
+            == {"type": "externalSandbox", "networkAccess": "enabled"}
+            and turn["approvalPolicy"] == "untrusted"
+            and turn["approvalsReviewer"] == "user"
+            for turn in turns
+        )
         assert any(
             r.get("method") == "thread/resume"
             and r["params"]["threadId"] == "thread-fixture"

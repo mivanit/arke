@@ -5,7 +5,12 @@ from .base import Adapter, Event, Launch, SubscriptionRequired
 __all__ = ["Adapter", "Event", "Launch", "SubscriptionRequired", "adapter"]
 
 
-def adapter(launch: Launch) -> Adapter:
+def adapter(launch: Launch, *, external_sandbox: bool = False) -> Adapter:
+    """Open a native adapter in this process.
+
+    Only set external_sandbox when the caller already isolated this process.
+    Runner supplies it to container workers; launch profiles cannot set it.
+    """
     if launch.runner != "local":
         raise ValueError("use arke.runner.Runner for container execution")
     if launch.native_home is not None:
@@ -17,5 +22,5 @@ def adapter(launch: Launch) -> Adapter:
     if launch.harness == "codex":
         from .codex import Codex
 
-        return Codex(launch)
+        return Codex(launch, external_sandbox=external_sandbox)
     raise ValueError(f"unsupported harness: {launch.harness}")

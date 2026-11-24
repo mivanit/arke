@@ -224,6 +224,8 @@ class Runner:
                     "launch": launch,
                     "native_id": native_id,
                     "bus": self.launch.bus_call is not None,
+                    # This is execution context, never an owner/chat profile setting.
+                    "external_sandbox": self.container is not None,
                 },
             )
 

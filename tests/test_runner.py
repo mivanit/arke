@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -34,6 +35,95 @@ async def complete(runner: Runner, *, interrupt: bool = False) -> list[Event]:
                 await runner.respond(event.data["request_id"], {"allow": True})
     assert events[-1].kind == "completed"
     return events
+
+
+@pytest.mark.parametrize("container", [False, True])
+def test_runner_derives_sandbox_context_from_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, container: bool
+) -> None:
+    # An inherited flag must not silently disable the local native sandbox.
+    monkeypatch.setenv("ARKE_EXTERNAL_SANDBOX", "1")
+    workspace, home = tmp_path / "workspace", tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    capture = tmp_path / "open.json"
+
+    class CaptureRunner(Runner):
+        def command(self) -> list[str]:
+            super().command()  # Real validation and container/local selection.
+            return [
+                sys.executable,
+                "-c",
+                """
+import json, sys
+from pathlib import Path
+for line in sys.stdin:
+    message = json.loads(line)
+    if message['method'] == 'open':
+        Path(sys.argv[1]).write_text(json.dumps(message['params']))
+    print(json.dumps({'id': message['id'], 'result': None}), flush=True)
+    if message['method'] == 'close':
+        break
+""",
+                str(capture),
+            ]
+
+    async def scenario() -> None:
+        runner = CaptureRunner(
+            Launch(
+                "codex",
+                workspace,
+                runner="container" if container else "local",
+                native_home=home if container else None,
+            )
+        )
+        try:
+            await runner.open(None)
+            request = json.loads(capture.read_text())
+            assert request["external_sandbox"] is container
+            assert "external_sandbox" not in request["launch"]
+        finally:
+            # This test substitutes a local protocol recorder for Docker.
+            runner.container = None
+            await runner.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("external_sandbox", [False, True])
+def test_worker_applies_supervisor_sandbox_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external_sandbox: bool
+) -> None:
+    clear_billing(monkeypatch)
+    policy = (
+        {"type": "externalSandbox", "networkAccess": "enabled"}
+        if external_sandbox
+        else None
+    )
+    source = CODEX_FIXTURE.replace(
+        '    elif method == "turn/start":',
+        '    elif method == "turn/start":\n'
+        f'        assert message["params"].get("sandboxPolicy") == {policy!r}\n'
+        '        assert message["params"]["approvalPolicy"] == "untrusted"\n'
+        '        assert message["params"]["approvalsReviewer"] == "user"',
+    )
+    path = executable(tmp_path, "codex", source)
+
+    class WorkerContext(Runner):
+        async def _call(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "open":
+                params["external_sandbox"] = external_sandbox
+            return await super()._call(method, params)
+
+    async def scenario() -> None:
+        runner = WorkerContext(Launch("codex", tmp_path, executable=str(path)))
+        try:
+            await runner.open(None)
+            await complete(runner)
+        finally:
+            await runner.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("harness", ["codex", "claude"])

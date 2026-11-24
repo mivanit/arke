@@ -128,7 +128,10 @@ async def serve() -> None:
                             }
                         },
                     )
-                native = adapter(launch)
+                external_sandbox = params.get("external_sandbox", False)
+                if type(external_sandbox) is not bool:
+                    raise ValueError("external_sandbox must be a boolean")
+                native = adapter(launch, external_sandbox=external_sandbox)
                 result = await native.open(params["native_id"])
             elif native is None:
                 raise RuntimeError("worker has not opened")

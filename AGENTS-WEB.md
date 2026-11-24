@@ -93,6 +93,15 @@ The worker receives scoped commands and events, not the owner key or Docker sock
 container must not hold both the shared worker and Arke's administration state. See the setup
 below.
 
+Container workers use Codex's supported `externalSandbox` turn policy: Docker provides
+isolation, so Codex does not attempt to create another Linux sandbox inside it. The policy
+is applied on every turn, including after resume. Command approval remains `untrusted` with
+the owner as reviewer. Local workers retain Codex's `workspace-write` sandbox. The runner
+selects this automatically; it is not a profile setting or an environment-variable override.
+Docker's read-only image, mount restrictions, dropped capabilities and resource limits are
+unchanged. Production containers retain their configured network access; CI disables it.
+Rebuild `Dockerfile.agent` when updating Arke so the supervisor and worker run the same code.
+
 New conversations record their effective native storage roots. Legacy rows retain unknown
 historical roots rather than guessing from the current environment. Current defaults and
 known private locations are protected, but Arke cannot discover an older custom location that
@@ -320,8 +329,10 @@ It requires Docker daemon access, the locked Python extras, Node, and Playwright
 * The installed image's web entry point, authentication, packaged assets and shutdown.
 * The boundary probe below, plus native protocol initialization inside that image.
 * Actual Claude and Codex tool execution with owner approval, driven by a loopback scripted
-  model. These direct native tests use test provider configuration; the production adapters
-  retain their subscription-only authentication checks.
+  model. The Codex probe denies a command, verifies it did not run, then approves it in a
+  second turn using the production external-sandbox policy. These direct native tests use
+  test provider configuration; the production adapters retain their subscription-only
+  authentication checks.
 * Both standalone chat and the dashboard, using real browser HTTP/SSE, session storage,
   container workers and scripted native CLIs. Checks include creation, shared access,
   approvals, interrupt/redirect, held queues, restart without automatic continuation, explicit
@@ -331,9 +342,9 @@ All native probes and workers have `--network=none`, fresh homes and synthetic s
 The browser talks only to the loopback supervisor. Builds and dependency installation can
 download packages; execution needs no vendor keys, subscription tokens, or model spending.
 Unlike the older hook-test job, deployment CI does not relax Docker security profiles or
-host user-namespace restrictions. Owner-approved commands can run outside the native CLI's
-inner sandbox while remaining inside the production Docker boundary; this test does not
-assert that nested sandboxing is available on every host.
+host user-namespace restrictions. Codex delegates sandbox enforcement to the production
+Docker boundary using its [external-sandbox protocol](https://learn.chatgpt.com/docs/app-server#command-execution).
+The test fails if commands bypass owner approval or fail to execute after approval.
 
 An explicit subscription smoke check is separate:
 

@@ -49,8 +49,9 @@ def subscription_config(config: dict[str, Any]) -> None:
 
 
 class Codex:
-    def __init__(self, launch: Launch) -> None:
+    def __init__(self, launch: Launch, *, external_sandbox: bool = False) -> None:
         self.launch = launch
+        self.external_sandbox = external_sandbox
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
@@ -175,6 +176,7 @@ class Codex:
         params: dict[str, Any] = {
             "cwd": str(self.launch.cwd),
             "approvalPolicy": "untrusted",
+            "approvalsReviewer": "user",
             "sandbox": "workspace-write",
             "modelProvider": "openai",
         }
@@ -198,12 +200,24 @@ class Codex:
         return self.thread
 
     async def run(self, text: str) -> AsyncIterator[Event]:
+        params: dict[str, Any] = {
+            "threadId": self.thread,
+            "input": [{"type": "text", "text": text}],
+            "approvalPolicy": "untrusted",
+            "approvalsReviewer": "user",
+        }
+        if self.external_sandbox:
+            # The supervisor already started us inside its restricted container.
+            # Docker owns filesystem/network isolation; nested bubblewrap cannot
+            # create namespaces under those restrictions. Apply on every turn,
+            # including the first turn after native resume. Approval is separate.
+            params["sandboxPolicy"] = {
+                "type": "externalSandbox",
+                "networkAccess": "enabled",
+            }
         result = await self._call(
             "turn/start",
-            {
-                "threadId": self.thread,
-                "input": [{"type": "text", "text": text}],
-            },
+            params,
         )
         self.turn = result["turn"]["id"]
         yield Event("started", {"turn_id": self.turn})

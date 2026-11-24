@@ -23,16 +23,30 @@ def clear_billing(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(name)
 
 
+@pytest.mark.parametrize("external_sandbox", [False, True])
 def test_codex_protocol_approval_and_interrupt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external_sandbox: bool
 ) -> None:
     clear_billing(monkeypatch)
     executable = tmp_path / "codex-fixture"
-    executable.write_text(f"#!{sys.executable}\n" + CODEX_FIXTURE)
+    policy = (
+        {"type": "externalSandbox", "networkAccess": "enabled"}
+        if external_sandbox
+        else None
+    )
+    source = CODEX_FIXTURE.replace(
+        '    elif method == "turn/start":',
+        '    elif method == "turn/start":\n'
+        '        assert message["params"]["approvalPolicy"] == "untrusted"\n'
+        '        assert message["params"]["approvalsReviewer"] == "user"\n'
+        f'        assert message["params"].get("sandboxPolicy") == {policy!r}',
+    )
+    executable.write_text(f"#!{sys.executable}\n" + source)
     executable.chmod(0o700)
 
     async def scenario() -> None:
-        adapter = Codex(Launch("codex", tmp_path, executable=str(executable)))
+        launch = Launch("codex", tmp_path, executable=str(executable))
+        adapter = Codex(launch, external_sandbox=external_sandbox)
         try:
             assert await adapter.open(None) == "thread-fixture"
             events = []
@@ -55,6 +69,14 @@ def test_codex_protocol_approval_and_interrupt(
         finally:
             await adapter.close()
         assert adapter.process is not None and adapter.process.returncode is not None
+        resumed = Codex(launch, external_sandbox=external_sandbox)
+        try:
+            assert await resumed.open("thread-fixture") == "thread-fixture"
+            async for event in resumed.run("after restart"):
+                if event.kind == "approval":
+                    await resumed.respond(event.data["request_id"], {"allow": False})
+        finally:
+            await resumed.close()
 
     asyncio.run(scenario())
 
