@@ -12,7 +12,8 @@ import pytest
 
 from arke.harnesses import Event, Launch
 from arke.runner import Runner
-from tests.test_harness_adapters import CLAUDE_FIXTURE, CODEX_FIXTURE, clear_billing
+from tests.native_fixtures import CLAUDE_FIXTURE, CODEX_FIXTURE
+from tests.test_harness_adapters import clear_billing
 
 
 def executable(tmp_path: Path, harness: str, source: str) -> Path:
@@ -60,6 +61,7 @@ def test_worker_subscription_protocol_control_and_resume(
                         reference = event.data["native_id"]
             assert reference
             await complete(runner, interrupt=True)
+            await complete(runner)
         finally:
             await runner.close()
         assert runner.process is not None and runner.process.returncode is not None

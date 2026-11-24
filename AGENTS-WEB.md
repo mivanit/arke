@@ -309,9 +309,31 @@ Python tests, and browser tests. Native protocol fixtures and fake adapters exer
 interruption, authorization, receipts, and recovery without model calls or credentials.
 
 `python -m tests.native_contract --thread` checks the installed CLI versions, Codex
-initialization, effective subscription configuration, and local thread creation in a fresh
-repo-local home. It submits no model turn and does not use the owner's login. This checks
+initialization, effective subscription configuration, local thread creation, and Claude SDK
+initialization in a fresh repo-local home. It submits no model turn and does not use the owner's login. This checks
 protocol compatibility; it does not establish subscription access or model behavior.
+
+`make test-deployment` builds `Dockerfile.agent` and runs the deployment CI job locally.
+It requires Docker daemon access, the locked Python extras, Node, and Playwright/Chromium
+(`make setup-browser`). It covers:
+
+* The installed image's web entry point, authentication, packaged assets and shutdown.
+* The boundary probe below, plus native protocol initialization inside that image.
+* Actual Claude and Codex tool execution with owner approval, driven by a loopback scripted
+  model. These direct native tests use test provider configuration; the production adapters
+  retain their subscription-only authentication checks.
+* Both standalone chat and the dashboard, using real browser HTTP/SSE, session storage,
+  container workers and scripted native CLIs. Checks include creation, shared access,
+  approvals, interrupt/redirect, held queues, restart without automatic continuation, explicit
+  native resume, scoped bus calls, and removal of every worker container.
+
+All native probes and workers have `--network=none`, fresh homes and synthetic state.
+The browser talks only to the loopback supervisor. Builds and dependency installation can
+download packages; execution needs no vendor keys, subscription tokens, or model spending.
+Unlike the older hook-test job, deployment CI does not relax Docker security profiles or
+host user-namespace restrictions. Owner-approved commands can run outside the native CLI's
+inner sandbox while remaining inside the production Docker boundary; this test does not
+assert that nested sandboxing is available on every host.
 
 An explicit subscription smoke check is separate:
 
@@ -331,12 +353,12 @@ After building the image, run the deterministic container boundary check:
 uv run --locked --all-extras python -m tests.container_acceptance --image arke-agent:local
 ```
 
-It uses the production runner flags without a model request. It checks private-state access,
-escaping symlinks, process/environment isolation, control sockets, and intended workspace
+It uses the production runner flags plus `--network=none`, without a model request. It checks private-state access,
+escaping symlinks, process/environment isolation, dropped capabilities, control sockets, and intended workspace
 access. Host fixtures stay under this repository's `.temp` directory. This does not establish
-that each native CLI's own sandbox works inside the container: native command execution,
-authentication, approval, and interruption need a separate deployment acceptance pass.
-Do not treat fixture tests or a successful image build as completion of those checks.
+that each native CLI's own sandbox works inside the container. Subscription authentication
+and real-provider behavior still need a separate, manual acceptance pass. CI does not run
+`subscription_smoke` or `test-live`.
 The older `test-live` target is an API-billed hook test and does not establish subscription support.
 
 Native contracts used here: [Claude SDK](https://code.claude.com/docs/en/agent-sdk/overview),

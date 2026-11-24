@@ -507,6 +507,14 @@ The same command also runs both interactive CLIs in private tmux sessions with n
 
 The ordinary Python suite also rehearses moving an installed clone with existing data: the installer must require explicit unit replacement, preserve configuration and a backup of the old unit, and retain message history, unread receipts, project membership and send deduplication after the server restarts. These checks run real server processes; systemd commands are recorded by a test substitute, not executed against a host user service.
 
+The separate `deployment` CI job runs `make test-deployment`: it builds the production worker
+image, checks isolation and installed native protocols, executes real CLI commands against a
+local scripted model, and drives both managed web interfaces through container workers with
+fake native replies. Every worker has networking disabled and only synthetic mounts. It uses
+the production security restrictions, without the legacy hook job's unconfined profiles.
+Run it locally after `make setup-browser`, with Docker daemon access. See
+[managed-agent validation](AGENTS-WEB.md#validation) for coverage and the manual subscription checks.
+
 There is also an **opt-in, paid smoke test** using the same checks with real models, separate from ordinary CI:
 
 ```bash
@@ -516,7 +524,7 @@ make test-live HARNESS=claude
 make test-live HARNESS=codex
 ```
 
-Add `CONTAINER=podman` when using Podman. The live image installs Claude Code 2.1.310 and Codex 0.167.1 and runs as a separate container user with fresh configuration. No personal settings or login files are mounted. The test starts its own bus and asks the actual CLI to send mail, spawn a helper, acknowledge incoming mail, and resume the same conversation after a bus restart. It asserts that helper sends reach only the parent and that helpers never register separately. Each CLI invocation has a timeout; Claude also has turn and cost limits. Choose a model with shell and subagent support. CLI/API errors and unsupported behavior fail the test rather than being skipped.
+Add `CONTAINER=podman` when using Podman. The live image installs Claude Code 2.1.310 and Codex 0.172.0 and runs as a separate container user with fresh configuration. No personal settings or login files are mounted. The test starts its own bus and asks the actual CLI to send mail, spawn a helper, acknowledge incoming mail, and resume the same conversation after a bus restart. It asserts that helper sends reach only the parent and that helpers never register separately. Each CLI invocation has a timeout; Claude also has turn and cost limits. Choose a model with shell and subagent support. CLI/API errors and unsupported behavior fail the test rather than being skipped.
 
 Codex's test invocation uses its `--dangerously-bypass-hook-trust` automation flag only for the generated hooks inside that disposable container; installed user hooks still require [normal review](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks). API credentials are passed only to the selected harness process in the paid test. CI requires no API secrets. The paid test uses non-interactive sessions; `test-mocked` adds interactive terminal coverage for the pinned CLI versions. Simulated tmux and daemon tests cover additional wake-up and recovery cases without model calls.
 

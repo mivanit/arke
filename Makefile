@@ -5,13 +5,14 @@ NODE ?= node
 CONTAINER ?= docker
 PYTHON_VERSION ?= 3.12
 TEST_IMAGE ?= arke-test:$(PYTHON_VERSION)
+AGENT_IMAGE ?= arke-agent:local
 # extra `run` flags for test-mocked, e.g. to let Codex's bubblewrap sandbox create namespaces (see the CI workflow)
 RUN_FLAGS ?=
 HARNESS ?= claude
 LIVE_KEY = $(if $(filter claude,$(HARNESS)),ANTHROPIC_API_KEY,CODEX_API_KEY)
 
 .DEFAULT_GOAL := check
-.PHONY: check format check-format typing test test-python test-browser setup-browser test-container test-mocked test-live demo demo-build
+.PHONY: check format check-format typing test test-python test-browser setup-browser test-container test-mocked test-deployment test-live demo demo-build
 
 check: check-format typing test
 
@@ -56,6 +57,13 @@ test-mocked:
 	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke claude
 	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke claude --native
 	$(CONTAINER) run --rm --network=none --shm-size=1g $(RUN_FLAGS) --entrypoint python3 arke-live-test -m tests.tui_smoke codex
+
+# Production Docker restrictions, fake native conversations, real browser and
+# offline CLI contract/tool probes. Requires Docker, uv, Node and setup-browser.
+# No RUN_FLAGS escape hatch: the production security boundary is the assertion.
+test-deployment:
+	docker build -f Dockerfile.agent -t $(AGENT_IMAGE) .
+	$(UV) run --locked --all-extras python -m tests.deployment_ci --image $(AGENT_IMAGE)
 
 # Explicit opt-in: real model calls, separate from the credential-free CI suite.
 test-live:

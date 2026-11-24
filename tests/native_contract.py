@@ -15,12 +15,34 @@ import contextlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from arke.harnesses.codex import subscription_config
+
+CLAUDE_INITIALIZE = """
+import asyncio, json, os, shutil
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+
+async def main():
+    client = ClaudeSDKClient(options=ClaudeAgentOptions(
+        cli_path=shutil.which("claude"), cwd=os.getcwd(), setting_sources=[],
+        settings=json.dumps({"forceLoginMethod": "claudeai", "disableAllHooks": True}),
+        extra_args={"strict-mcp-config": None},
+    ))
+    async with asyncio.timeout(45):
+        try:
+            await client.connect()  # No prompt, query, login, or account refresh.
+            assert isinstance(await client.get_server_info(), dict)
+        finally:
+            await client.disconnect()
+    print("passed (no prompt submitted)")
+
+asyncio.run(main())
+"""
 
 
 async def probe(thread: bool = False) -> None:
@@ -65,7 +87,7 @@ async def probe(thread: bool = False) -> None:
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                async with asyncio.timeout(15):
+                async with asyncio.timeout(60):
                     stdout, stderr = await process.communicate()
                 if process.returncode:
                     raise RuntimeError(
@@ -88,6 +110,9 @@ async def probe(thread: bool = False) -> None:
             "codex": await command(codex, "--version"),
             "claude": await command(claude, "--version"),
         }
+        # SDK options overlay the process environment. A separate Python process
+        # ensures even inherited SDK variables and credentials are absent.
+        claude_initialize = await command(sys.executable, "-c", CLAUDE_INITIALIZE)
         process = await asyncio.create_subprocess_exec(
             codex,
             "app-server",
@@ -162,6 +187,7 @@ async def probe(thread: bool = False) -> None:
                 print(json.dumps(diagnostics, indent=2))
                 raise
             report: dict[str, Any] = versions | {
+                "claude_sdk_initialize": claude_initialize,
                 "initialize": "passed",
                 "subscription_config": "passed",
             }

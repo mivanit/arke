@@ -54,6 +54,10 @@ for path in ("/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.soc
     require(not pathlib.Path(path).exists(), "host control socket absent: " + path)
 require(os.readlink("/proc/self/ns/pid") != settings["pid_namespace"], "separate PID namespace")
 require(os.readlink("/proc/self/ns/mnt") != settings["mount_namespace"], "separate mount namespace")
+require(set(os.listdir("/sys/class/net")) == {"lo"}, "no external network interface")
+status = dict(line.split(":", 1) for line in pathlib.Path("/proc/self/status").read_text().splitlines())
+require(status["NoNewPrivs"].strip() == "1", "privilege escalation disabled")
+require(int(status["CapEff"].strip(), 16) == 0, "all effective capabilities dropped")
 require(settings["environment_name"] not in os.environ, "supervisor environment not inherited")
 marker = settings["environment_marker"].encode()
 for proc in pathlib.Path("/proc").iterdir():
@@ -107,6 +111,8 @@ def check(image: str, fixtures_dir: Path) -> None:
         validate_isolation(launch, (state, key, history))
         runner = Runner(launch)
         command = runner.command()
+        # Native workers normally need vendor access. Acceptance never does.
+        command.insert(2, "--network=none")
         if command[-2:] != ["-m", "arke.worker"]:
             raise RuntimeError(
                 "production worker invocation changed; update the acceptance probe"
