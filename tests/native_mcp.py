@@ -102,6 +102,15 @@ async def worker(model_url: str) -> None:
                 "requires_openai_auth=false\nrequest_max_retries=0\nstream_max_retries=0\n"
             )
             for name, settings in self.launch.mcp_servers.items():
+                if name == "arke":
+                    # Exercise asynchronous startup even on fast machines.
+                    # Keep the worker's scoped socket environment unchanged.
+                    settings = settings | {
+                        "args": [
+                            "-c",
+                            "import time; time.sleep(1); from arke.bus_tools import main; main()",
+                        ]
+                    }
                 text += f"\n[mcp_servers.{name}]\n"
                 for key, value in settings.items():
                     encoded = (
@@ -146,6 +155,7 @@ async def worker(model_url: str) -> None:
                 },
             )
             self.thread = result["thread"]["id"]
+            await self._wait_for_mcp()
             return self.thread
 
     class FixtureClaude(Claude):

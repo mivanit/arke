@@ -17,6 +17,8 @@ from .base import (
 )
 from .events import READ_BATCH, EventBuffer, native_buffer
 
+MCP_START_TIMEOUT = 30.0
+
 
 def mcp_tool_approval(method: str, params: dict[str, Any]) -> bool:
     """Recognize Codex's allow-once prompt, not arbitrary MCP forms or URLs."""
@@ -209,7 +211,49 @@ class Codex:
             raise RuntimeError(
                 "native conversation still has an active turn; inspect it before resuming"
             )
+        await self._wait_for_mcp()
         return self.thread
+
+    async def _wait_for_mcp(self) -> None:
+        """Thread creation can return before its MCP catalog is available."""
+        pending = {
+            name
+            for name, config in self.launch.mcp_servers.items()
+            if config.get("enabled", True)
+        }
+        if not pending:
+            return
+        try:
+            async with asyncio.timeout(MCP_START_TIMEOUT):
+                while pending:
+                    for name in sorted(pending):
+                        result = await self._call(
+                            "mcpServerStatus/list",
+                            {"threadId": self.thread, "serverName": name},
+                        )
+                        for server in result.get("data", []):
+                            if server.get("name") != name:
+                                continue
+                            status = server.get("runtimeStatus")
+                            error = server.get("toolsError")
+                            if error or status in (
+                                "authenticationRequired",
+                                "failed",
+                                "cancelled",
+                                "disabled",
+                            ):
+                                raise RuntimeError(
+                                    f"Codex MCP server {name!r} is unavailable: {error or status}"
+                                )
+                            if status == "connected":
+                                pending.remove(name)
+                                break
+                    if pending:
+                        await asyncio.sleep(0.1)
+        except TimeoutError:
+            raise RuntimeError(
+                "Timed out waiting for Codex MCP servers: " + ", ".join(sorted(pending))
+            ) from None
 
     async def run(self, text: str) -> AsyncIterator[Event]:
         params: dict[str, Any] = {

@@ -18,6 +18,9 @@ for line in sys.stdin:
         result = {"config": {"model_provider": "openai", "forced_login_method": "chatgpt"}}
     elif method in ("thread/start", "thread/resume"):
         result = {"thread": {"id": "thread-fixture", "turns": []}}
+    elif method == "mcpServerStatus/list":
+        assert message["params"]["threadId"] == "thread-fixture"
+        result = {"data": [{"name": message["params"]["serverName"], "runtimeStatus": "connected", "tools": {}}]}
     elif method == "turn/start":
         turn += 1
         result = {"turn": {"id": str(turn), "status": "inProgress"}}

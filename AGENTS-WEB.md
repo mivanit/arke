@@ -143,6 +143,9 @@ must configure trusted proxy handling explicitly; do not broadly trust forwarded
   guess the outcome and run the redirect.
 * Tool approval and question responses use a separate control path. Stale and duplicate approvals
   cannot authorize another turn. Unsupported native request types fail closed.
+* Before starting or resuming a Codex conversation, Arke waits for its configured MCP servers
+  to finish connecting and listing tools. Failed discovery or a 30-second readiness timeout
+  stops startup before a user turn is sent; explicitly disabled servers are skipped.
 * Reloading a browser only observes the existing session. A slow or disconnected browser does
   not own the agent's lifetime.
 * After a backend restart, all recovered conversations and pending messages are paused. New

@@ -81,6 +81,109 @@ def test_codex_protocol_approval_and_interrupt(
     asyncio.run(scenario())
 
 
+def test_codex_waits_for_mcp_on_start_and_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clear_billing(monkeypatch)
+    source = CODEX_FIXTURE.replace("turn = 0", "turn = 0\nmcp_checks = 0")
+    source = (
+        source.replace(
+            '    elif method == "mcpServerStatus/list":',
+            '    elif method == "mcpServerStatus/list":\n'
+            '        assert message["params"]["serverName"] == "arke"\n'
+            "        mcp_checks += 1",
+        )
+        .replace(
+            '"runtimeStatus": "connected"',
+            '"runtimeStatus": "connected" if mcp_checks >= 3 else "starting"',
+        )
+        .replace(
+            '    elif method == "turn/start":',
+            '    elif method == "turn/start":\n        assert mcp_checks >= 3',
+        )
+    )
+    executable = tmp_path / "codex-fixture"
+    executable.write_text(f"#!{sys.executable}\n" + source)
+    executable.chmod(0o700)
+
+    async def scenario() -> None:
+        for native_id in (None, "thread-fixture"):
+            native = Codex(
+                Launch(
+                    "codex",
+                    tmp_path,
+                    executable=str(executable),
+                    mcp_servers={
+                        "arke": {"command": "fixture"},
+                        "disabled": {"enabled": False},
+                    },
+                )
+            )
+            try:
+                await native.open(native_id)
+                async for event in native.run("read inbox"):
+                    if event.kind == "approval":
+                        await native.respond(event.data["request_id"], {"allow": True})
+                    if event.kind == "completed":
+                        assert event.data["status"] == "completed"
+            finally:
+                await native.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "status,error",
+    [
+        ("failed", None),
+        ("cancelled", None),
+        ("disabled", None),
+        ("authenticationRequired", None),
+        ("connected", "could not list tools"),
+    ],
+)
+def test_codex_mcp_startup_errors_are_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str, error: str | None
+) -> None:
+    async def scenario() -> None:
+        native = Codex(Launch("codex", tmp_path, mcp_servers={"arke": {}}))
+
+        async def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "data": [{"name": "arke", "runtimeStatus": status, "toolsError": error}]
+            }
+
+        monkeypatch.setattr(native, "_call", call)
+        with pytest.raises(
+            RuntimeError, match="Codex MCP server 'arke' is unavailable"
+        ):
+            await native._wait_for_mcp()
+
+    asyncio.run(scenario())
+
+
+def test_codex_mcp_startup_has_a_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from arke.harnesses import codex
+
+    monkeypatch.setattr(codex, "MCP_START_TIMEOUT", 0.02)
+
+    async def scenario() -> None:
+        native = Codex(Launch("codex", tmp_path, mcp_servers={"arke": {}}))
+
+        async def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            return {"data": []}
+
+        monkeypatch.setattr(native, "_call", call)
+        with pytest.raises(
+            RuntimeError, match="Timed out waiting for Codex MCP servers: arke"
+        ):
+            await native._wait_for_mcp()
+
+    asyncio.run(scenario())
+
+
 def test_billing_overrides_and_native_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_billing(monkeypatch)
     for harness, variable in (
