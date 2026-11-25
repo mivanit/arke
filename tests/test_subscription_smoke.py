@@ -15,14 +15,16 @@ from tests import subscription_smoke as smoke
 
 
 @pytest.mark.parametrize("resume_result", ["correct", "wrong", "missing_terminal"])
+@pytest.mark.parametrize("container", [False, True])
 def test_smoke_requires_recall_after_fresh_adapter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume_result: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume_result: str, container: bool
 ) -> None:
     instances: list[FakeRunner] = []
     memory: dict[str, str] = {}
 
     class FakeRunner:
         def __init__(self, launch: Launch) -> None:
+            self.launch = launch
             instances.append(self)
             self.prompts: list[str] = []
             self.opened: list[str | None] = []
@@ -53,15 +55,19 @@ def test_smoke_requires_recall_after_fresh_adapter(
             self.closed = True
 
     monkeypatch.setattr(smoke, "Runner", FakeRunner)
+    home = tmp_path / "native-home" if container else None
     if resume_result == "correct":
-        asyncio.run(smoke.check("codex", tmp_path, None))
+        asyncio.run(smoke.check("codex", tmp_path, None, container_home=home))
     else:
         with pytest.raises(AssertionError):
-            asyncio.run(smoke.check("codex", tmp_path, None))
+            asyncio.run(smoke.check("codex", tmp_path, None, container_home=home))
     assert len(instances) == 2
     assert instances[0].closed and instances[1].closed
     assert instances[0].opened == [None]
     assert instances[1].opened == ["native-reference"]
+    assert instances[0].launch == instances[1].launch
+    assert instances[0].launch.runner == ("container" if container else "local")
+    assert instances[0].launch.native_home == home
     assert memory["marker"] in instances[0].prompts[0]
     assert memory["marker"] not in instances[0].prompts[1]
     assert memory["marker"] not in instances[1].prompts[0]

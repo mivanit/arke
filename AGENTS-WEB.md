@@ -386,6 +386,22 @@ existing native login. The smoke check verifies a fresh random marker in the res
 on a follow-up, and recall after closing and resuming through a fresh adapter. Native approval
 and interrupt behavior still require an acceptance pass against the supported CLI versions.
 
+To check a real subscription through the production container runner, use a dedicated
+native home already signed in as described in the container setup above. Both the workspace
+and native home must exist and be separate directories. For example, from a shell with
+Docker access, using the shared example's paths:
+
+```bash
+uv run --locked --all-extras python -m tests.subscription_smoke codex \
+  --cwd .local/home-workspace --container-home .local/home-native \
+  --image arke-agent:local --use-subscription
+```
+
+This uses the normal restricted worker command, opens a fresh container for resume, and
+consumes three real subscription turns. It neither copies credentials nor signs in for you,
+and it never pulls an image automatically. It is not part of CI. Passing `--image` without
+`--container-home` is rejected to avoid accidentally testing local execution instead.
+
 After building the image, run the deterministic container boundary check:
 
 ```bash

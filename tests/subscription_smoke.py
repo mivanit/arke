@@ -47,8 +47,22 @@ async def verify_turn(native: Adapter, prompt: str, marker: str) -> str | None:
     return reference
 
 
-async def check(kind: str, cwd: Path, model: str | None) -> None:
-    launch = Launch(kind, cwd, model=model)
+async def check(
+    kind: str,
+    cwd: Path,
+    model: str | None,
+    *,
+    container_home: Path | None = None,
+    image: str = "arke-agent:local",
+) -> None:
+    launch = Launch(
+        kind,
+        cwd,
+        model=model,
+        runner="container" if container_home is not None else "local",
+        native_home=container_home,
+        image=image,
+    )
     marker = "ARKE_" + secrets.token_hex(16)
     recall = "Reply with only the exact marker from my first message. Do not use tools."
     native = Runner(launch)
@@ -76,7 +90,7 @@ async def check(kind: str, cwd: Path, model: str | None) -> None:
     finally:
         await resumed.close()
     print(
-        f"{kind}: subscription authentication and verified follow-up/resume recall succeeded"
+        f"{kind} ({launch.runner}): subscription authentication and verified follow-up/resume recall succeeded"
     )
 
 
@@ -85,9 +99,29 @@ def main() -> None:
     parser.add_argument("harness", choices=("claude", "codex"))
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--model")
+    parser.add_argument(
+        "--container-home",
+        type=Path,
+        help="Run in the production worker container using this dedicated native home with an existing subscription login",
+    )
+    parser.add_argument(
+        "--image", help="Locally installed worker image (requires --container-home)"
+    )
     parser.add_argument("--use-subscription", action="store_true", required=True)
     args = parser.parse_args()
-    asyncio.run(check(args.harness, args.cwd.resolve(), args.model))
+    if args.image and args.container_home is None:
+        parser.error("--image requires --container-home")
+    asyncio.run(
+        check(
+            args.harness,
+            args.cwd.resolve(),
+            args.model,
+            container_home=args.container_home.resolve()
+            if args.container_home
+            else None,
+            image=args.image or "arke-agent:local",
+        )
+    )
 
 
 if __name__ == "__main__":
