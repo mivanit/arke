@@ -152,7 +152,7 @@ def test_full_queue_does_not_block_startup_or_other_agent_mail(tmp_path: Path) -
                 dashboard.bus.send("human", {"to": [agent["name"]], "text": "mail"})
             await dashboard.start()
             assert len(manager.snapshot(first)["queue"]) == 100
-            assert len(manager.snapshot(second)["queue"]) == 1
+            assert len(manager.snapshot(second)["queue"]) == 0
             assert dashboard.bus.agents["managed-" + first]["inbox"]
             assert dashboard.bus.agents["managed-" + second]["inbox"]
             # An agent created after startup has working tools before the next poll.

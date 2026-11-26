@@ -34,12 +34,14 @@ export class ArkeChat extends HTMLElement {
     <div id="history" role="log" aria-label="Conversation"></div><div id="preview"></div>
     <div id="approvals"></div><div id="queue"></div>
     <form id="compose"><label>Message<textarea id="message" required maxlength="100000"></textarea></label>
-      <div class="actions"><button id="send" type="submit">Send</button><label><input type="checkbox" id="interrupt"> Interrupt and redirect</label><button type="button" id="resume" hidden>Resume queue</button></div>
+      <div class="actions"><button id="send" type="submit">Send</button><label><input type="checkbox" id="interrupt"> Interrupt and redirect</label><button type="button" id="stop" hidden>Stop after this turn</button><button type="button" id="stop-now" hidden>Stop now</button><button type="button" id="resume" hidden>Resume queue</button></div>
     </form><dialog id="detail"><button id="close-detail">Close</button><pre id="detail-text"></pre></dialog>`;
     this.generation = 0; this.historyGeneration = 0;
     this.$ = id => this.shadowRoot.getElementById(id);
     this.$('compose').onsubmit = e => { e.preventDefault(); this.send(); };
-    this.$('resume').onclick = () => this.action('/resume', {});
+    this.$('resume').onclick = () => this.lifecycle('resume');
+    this.$('stop').onclick = () => this.lifecycle('stop', 'after_turn');
+    this.$('stop-now').onclick = () => this.lifecycle('stop', 'now');
     this.$('earlier').onclick = () => this.earlier();
     this.$('latest').onclick = () => this.latest();
     this.$('close-detail').onclick = () => this.$('detail').close();
@@ -48,13 +50,15 @@ export class ArkeChat extends HTMLElement {
 
   async open({ id, request, owner = false }) {
     this.disconnect();
+    this.sending = false; this.controlling = false;
     this.id = id; this.request = request; this.owner = owner; this.snapshot = null; this.snapshotHistorySeen = false; this.history = new Map();
     this.tail = new Map(); this.rows = new Map(); this.browsing = false; this.tailHasEarlier = false;
     this.detailGeneration = (this.detailGeneration || 0) + 1; this.$('detail').close(); this.$('detail-text').textContent = '';
     this.historyGeneration++; this.hasEarlier = false; this.loadingEarlier = false;
     for (const name of ['history', 'queue', 'approvals']) this.$(name).replaceChildren();
     for (const name of ['name', 'cwd', 'status', 'preview']) this.$(name).textContent = '';
-    this.$('send').disabled = false; this.$('earlier').hidden = true; this.$('earlier').disabled = false; this.$('latest').hidden = true; this.$('resume').hidden = true;
+    this.$('message').disabled = false; this.$('stop').hidden = true; this.$('stop-now').hidden = true;
+    this.$('send').disabled = true; this.$('earlier').hidden = true; this.$('earlier').disabled = false; this.$('latest').hidden = true; this.$('resume').hidden = true;
     this.approvalsSignature = ''; this.$('error').textContent = ''; this.$('message').value = '';
     this.$('interrupt').checked = false; this.$('interrupt').disabled = true;
     try { this.pending = JSON.parse(sessionStorage.getItem('arke.pending.' + id) || 'null'); } catch { this.pending = null; }
@@ -76,6 +80,50 @@ export class ArkeChat extends HTMLElement {
     } catch (error) { if (generation === this.generation) this.$('error').textContent = error.message; }
   }
 
+  async lifecycle(action, mode) {
+    if (!this.snapshot || this.controlling) return;
+    const generation = this.generation, observed = this.snapshot;
+    const body = { expected_control: observed.control_token };
+    if (action === 'stop') Object.assign(body, { mode, expected_active: this.snapshot.active });
+    this.controlling = true; this.renderControls(); this.lifecycleChanged();
+    try {
+      const result = await this.request(this.path('/' + action), { method: 'POST', body: JSON.stringify(body) });
+      if (generation !== this.generation) return;
+      // A response must not replace state received through SSE while it was
+      // in flight. The stream will also publish this accepted action.
+      if (this.snapshot === observed) this.render(result.conversation);
+      this.$('error').textContent = ''; // Pending synchronization is shown in the live status.
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.$('error').textContent = error.message;
+      if (error.status === 409) {
+        const beforeRefresh = this.snapshot;
+        try { const snapshot = await this.request(this.path()); if (generation === this.generation && this.snapshot === beforeRefresh) this.render(snapshot); } catch { /* SSE reconnect will refresh */ }
+      }
+    } finally {
+      if (generation === this.generation) { this.controlling = false; this.renderControls(); this.lifecycleChanged(); }
+    }
+  }
+
+  lifecycleChanged() {
+    this.dispatchEvent(new CustomEvent('lifecycle-change', { bubbles: true, composed: true, detail: { id: this.id, snapshot: this.snapshot } }));
+  }
+
+  renderControls() {
+    const s = this.snapshot;
+    this.$('send').disabled = this.sending || !s || (!!s.archived && !this.pending);
+    this.$('send').textContent = this.pending ? (s?.archived ? 'Check delivery' : 'Retry same message') : 'Send';
+    this.$('message').disabled = !!s?.archived;
+    this.$('interrupt').disabled = !s?.active || !!s.paused || !!s.stopping || !!s.retiring || !!s.interrupting || !!s.archived;
+    if (this.$('interrupt').disabled) this.$('interrupt').checked = false;
+    for (const [id, action] of [['stop', 'stop'], ['stop-now', 'stop_now'], ['resume', 'resume']]) {
+      const control = s?.controls?.[action];
+      this.$(id).hidden = !this.owner || (id === 'resume' ? !(s?.paused || s?.held) : !!s?.archived);
+      this.$(id).disabled = this.controlling || !control?.allowed;
+      this.$(id).title = control?.reason || '';
+    }
+  }
+
   clearStoredPending(cid, pending) {
     try {
       const key = 'arke.pending.' + cid, stored = JSON.parse(sessionStorage.getItem(key) || 'null');
@@ -91,7 +139,7 @@ export class ArkeChat extends HTMLElement {
       this.pending = { request_id: uuid(), text, interrupt: this.$('interrupt').checked, target: this.snapshot?.active || null };
       try { sessionStorage.setItem('arke.pending.' + this.id, JSON.stringify(this.pending)); } catch { /* memory-only */ }
     }
-    this.$('send').disabled = true;
+    this.sending = true; this.renderControls();
     const cid = this.id, pending = this.pending, generation = this.generation, request = this.request, path = this.path('/messages');
     try {
       await request(path, { method: 'POST', body: JSON.stringify(pending) });
@@ -108,7 +156,7 @@ export class ArkeChat extends HTMLElement {
         this.$('send').textContent = 'Send';
       } else this.$('send').textContent = 'Retry same message';
       this.$('error').textContent = error.message + (this.pending ? '\nDelivery is uncertain. Retry sends the same message with the same ID.' : '');
-    } finally { if (generation === this.generation) this.$('send').disabled = false; }
+    } finally { if (generation === this.generation) { this.sending = false; this.renderControls(); } }
   }
 
   async follow(controller) {
@@ -148,14 +196,22 @@ export class ArkeChat extends HTMLElement {
   }
 
   render(snapshot) {
+    const previous = this.snapshot;
     this.snapshot = { ...snapshot, history: this.snapshot?.history || [] };
     this.$('name').textContent = snapshot.name;
     this.$('cwd').textContent = `${snapshot.harness} · ${snapshot.cwd} · shared files`;
-    this.$('status').textContent = snapshot.state + (snapshot.stopping ? ' · stopping' : '') + (snapshot.paused ? ' · queued messages are paused' : '');
+    this.$('status').textContent = snapshot.archived ? 'Archived · history is read-only' :
+      snapshot.stopping ? 'Cleaning up execution; queue paused' :
+      snapshot.state === 'interrupting' ? 'Interrupting current turn; queue paused' :
+      snapshot.retiring ? 'Finishing current turn; queue paused' :
+      snapshot.state + (snapshot.paused ? ' · queued messages are paused' : '');
+    if (snapshot.synchronizing) this.$('status').textContent += ' · bus synchronization pending';
+    if (snapshot.approvals.length && !snapshot.stopping && snapshot.state !== 'interrupting') this.$('status').textContent += ' · awaiting approval';
     if (snapshot.error) this.$('error').textContent = snapshot.error;
-    this.$('interrupt').disabled = !snapshot.active || !!snapshot.stopping;
-    const held = snapshot.queue.some(item => item.status === 'held');
-    this.$('resume').hidden = !this.owner || !(snapshot.paused || held) || !!snapshot.active || !!snapshot.stopping;
+    this.renderControls();
+    if (!previous || previous.control_token !== snapshot.control_token || previous.archived !== snapshot.archived || previous.stopping !== snapshot.stopping || previous.active !== snapshot.active) {
+      this.lifecycleChanged();
+    }
     this.$('preview').textContent = snapshot.preview;
     if (snapshot.history) {
       this.updateHistory(snapshot);
@@ -173,7 +229,7 @@ export class ArkeChat extends HTMLElement {
         element('button', 'I checked its outcome', box).onclick = () => this.action('/requests/' + encodeURIComponent(item.id) + '/resolve', {});
       }
     }
-    const signature = JSON.stringify(snapshot.approvals);
+    const signature = JSON.stringify([snapshot.approvals, snapshot.stopping, snapshot.state === 'interrupting']);
     if (signature !== this.approvalsSignature) {
       this.approvalsSignature = signature; this.$('approvals').replaceChildren();
       for (const approval of snapshot.approvals) this.renderApproval(approval);
@@ -277,6 +333,7 @@ export class ArkeChat extends HTMLElement {
     const box = element('div', undefined, this.$('approvals')); box.className = 'pending';
     element('b', approval.kind === 'input' ? 'Agent has a question' : 'Permission requested', box);
     if (!this.owner) { element('p', 'Waiting for the owner.', box); return; }
+    if (this.snapshot.stopping || this.snapshot.state === 'interrupting') { element('p', 'Execution is stopping.', box); return; }
     if (approval.kind === 'input') {
       const form = element('form', undefined, box), fields = [];
       for (const question of approval.details.questions || []) {

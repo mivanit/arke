@@ -45,6 +45,7 @@ class Runtime:
     adapter: Adapter | None = None
     active: str | None = None
     started: bool = False
+    terminal: bool = False
     redirect: str | None = None
     interrupting: bool = False
     control: asyncio.Task[None] | None = None
@@ -52,6 +53,10 @@ class Runtime:
     turn_done: asyncio.Event = field(default_factory=asyncio.Event)
     closing: bool = False
     stopping: bool = False
+    retire: bool = False
+    control_revision: int = 0
+    resume_revision: int = 0
+    native_ready: asyncio.Event = field(default_factory=asyncio.Event)
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
     preview: str = ""
@@ -113,6 +118,10 @@ class Conversations:
                     row[1]
                     for row in self.db.execute("PRAGMA table_info(conversations)")
                 }
+                if "archived" not in columns:
+                    self.db.execute(
+                        "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+                    )
                 if "runner" not in columns:
                     self.db.execute(
                         "ALTER TABLE conversations ADD COLUMN runner TEXT NOT NULL DEFAULT 'local'"
@@ -128,7 +137,9 @@ class Conversations:
                 self.db.execute(
                     "UPDATE requests SET status='uncertain' WHERE status IN ('starting', 'running')"
                 )
-                self.db.execute("UPDATE conversations SET paused=1, state='paused'")
+                self.db.execute(
+                    "UPDATE conversations SET paused=1, state=CASE WHEN archived THEN 'archived' ELSE 'paused' END"
+                )
         except BaseException:
             if hasattr(self, "db"):
                 self.db.close()
@@ -139,6 +150,7 @@ class Conversations:
         self.prepare_launch: Callable[[str, Launch], Launch | Awaitable[Launch]] = (
             lambda cid, launch: launch
         )
+        self.retire_launch: Callable[[str], Awaitable[None]] | None = None
         self.runtime: dict[str, Runtime] = {}
         self.closed = False
         self._close_task: asyncio.Task[None] | None = None
@@ -156,6 +168,8 @@ class Conversations:
         return self.runtime.setdefault(cid, Runtime())
 
     def _change(self, cid: str, **fields: Any) -> None:
+        if fields.get("paused"):
+            self._rt(cid).control_revision += 1
         if fields:
             with self.db:
                 self.db.execute(
@@ -266,10 +280,15 @@ class Conversations:
             )
         return launch
 
-    def list_conversations(self) -> list[dict[str, Any]]:
+    def list_conversations(
+        self, *, include_archived: bool = False
+    ) -> list[dict[str, Any]]:
         return [
             self.snapshot(row[0], history_limit=0)
-            for row in self.db.execute("SELECT id FROM conversations ORDER BY created")
+            for row in self.db.execute(
+                "SELECT id FROM conversations WHERE archived=0 OR ? ORDER BY created",
+                (include_archived,),
+            )
         ]
 
     def history(
@@ -372,6 +391,10 @@ class Conversations:
         launch = self.profiles.get(row["profile"])
         return row | {
             "paused": bool(row["paused"]),
+            "archived": bool(row["archived"]),
+            "retiring": rt.retire,
+            "control_token": self.control_token(cid),
+            "controls": self.controls(cid),
             "held": self.db.execute(
                 "SELECT 1 FROM requests WHERE conversation=? AND status='held' LIMIT 1",
                 (cid,),
@@ -380,6 +403,7 @@ class Conversations:
             "profile_available": launch is not None,
             "active": rt.active,
             "stopping": rt.stopping,
+            "interrupting": rt.interrupting,
             "revision": f"{rt.generation}:{rt.revision}",
             "preview": rt.preview,
             "approvals": [
@@ -432,9 +456,16 @@ class Conversations:
             if (old["text"], old["mode"], old["origin"]) != (text, mode, origin):
                 raise Conflict("request ID was already used for different content")
             return {"id": request_id, "status": old["status"]}
+        row = self._row(cid)
+        if row["archived"]:
+            raise Conflict(
+                "conversation is archived; restore it before sending new messages"
+            )
         rt = self._preflight(cid)
         if redirect and (
-            not target
+            row["paused"]
+            or rt.retire
+            or not target
             or target != rt.active
             or rt.redirect
             or rt.interrupting
@@ -465,6 +496,7 @@ class Conversations:
         # failure must not turn this durable request into a definite rejection.
         try:
             if redirect:
+                rt.control_revision += 1
                 rt.redirect = request_id
                 if rt.started:
                     self._schedule_interrupt(cid)
@@ -496,7 +528,12 @@ class Conversations:
 
     def _ensure_worker(self, cid: str) -> None:
         rt = self._rt(cid)
-        if rt.stopping:
+        if (
+            rt.stopping
+            or rt.retire
+            or self._row(cid)["paused"]
+            or self._row(cid)["archived"]
+        ):
             # The retiring task still owns this runtime. Accepted input remains
             # paused; only explicit Resume after retirement may start it again.
             return
@@ -530,6 +567,7 @@ class Conversations:
             return
         rt.task = None
         rt.stopping = False
+        rt.retire = False
         rt.active = None
         rt.approvals.clear()
         rt.redirect = None
@@ -537,29 +575,144 @@ class Conversations:
         rt.turn_done.set()
         self._change(cid, state="paused" if self._row(cid)["paused"] else "idle")
 
-    def resume(self, cid: str) -> None:
+    def control_token(self, cid: str) -> str:
+        rt = self._rt(cid)
+        return f"{rt.generation}:{rt.control_revision}"
+
+    def _check_control(self, cid: str, expected: str | None) -> None:
         if self.closed:
             raise Conflict("manager is stopping")
-        self._launch(self._row(cid))
+        if expected is not None and expected != self.control_token(cid):
+            raise Conflict("controls changed; refresh and choose the action again")
+
+    def controls(self, cid: str) -> dict[str, dict[str, Any]]:
+        row, rt = self._row(cid), self._rt(cid)
+        pending = self.db.execute(
+            "SELECT status FROM requests WHERE conversation=? AND status IN ('queued','held','starting','running','uncertain')",
+            (cid,),
+        ).fetchall()
+        states = {r[0] for r in pending}
+        shared = self.db.execute(
+            "SELECT 1 FROM metadata WHERE key='shared_conversation' AND value=?", (cid,)
+        ).fetchone()
+        busy = bool(rt.task is not None or rt.stopping or rt.retire or rt.interrupting)
+        launch_error = ""
+        try:
+            self._launch(row)
+        except ValueError as exc:
+            launch_error = str(exc)
+        reasons = {
+            "stop": "Conversation is archived"
+            if row["archived"]
+            else "Execution is cleaning up"
+            if rt.stopping
+            else "",
+            "stop_now": "Conversation is archived"
+            if row["archived"]
+            else "Execution is already interrupting or cleaning up"
+            if rt.stopping or rt.interrupting
+            else "",
+            "resume": "Restore the conversation first"
+            if row["archived"]
+            else "execution is still stopping; wait for cleanup to finish"
+            if rt.active or rt.stopping or rt.retire or rt.interrupting
+            else "Resolve uncertain requests first"
+            if "uncertain" in states
+            else launch_error
+            or (
+                "Queue is already running"
+                if not row["paused"] and "held" not in states
+                else ""
+            ),
+            "archive": "The shared conversation cannot be archived"
+            if shared
+            else "Already archived"
+            if row["archived"]
+            else "Stop execution first"
+            if not row["paused"] or busy
+            else "Discard pending messages and resolve uncertain requests first"
+            if states
+            else "",
+            "restore": "Conversation is not archived" if not row["archived"] else "",
+        }
+        return {
+            name: {
+                "allowed": not (reason or self.closed),
+                "reason": "Manager is stopping" if self.closed else reason,
+            }
+            for name, reason in reasons.items()
+        }
+
+    def _eligible(self, cid: str, action: str, expected: str | None) -> Runtime:
+        self._check_control(cid, expected)
         rt = self._preflight(cid)
-        if rt.stopping:
-            raise Conflict("execution is still stopping; wait for cleanup to finish")
-        if rt.active or rt.interrupting:
-            raise Conflict("wait for the active turn to finish")
-        if self.db.execute(
-            "SELECT 1 FROM requests WHERE conversation=? AND status='uncertain'", (cid,)
-        ).fetchone():
-            raise Conflict(
-                "inspect the native conversation and resolve uncertain requests before resuming"
-            )
-        self._ensure_worker(cid)
+        control = self.controls(cid)[action]
+        if not control["allowed"]:
+            raise Conflict(control["reason"])
+        return rt
+
+    def stop(
+        self,
+        cid: str,
+        *,
+        mode: str = "after_turn",
+        expected: str | None = None,
+        active: str | None = None,
+    ) -> None:
+        if mode not in ("after_turn", "now"):
+            raise ValueError("stop mode must be after_turn or now")
+        rt = self._eligible(cid, "stop_now" if mode == "now" else "stop", expected)
+        if mode == "now" and active != rt.active:
+            raise Conflict("the targeted turn changed; refresh before stopping it")
+        rt.redirect = None
+        rt.retire = rt.task is not None
+        self._change(
+            cid,
+            paused=1,
+            state="interrupting"
+            if rt.interrupting
+            else "finishing"
+            if rt.active
+            else "paused",
+        )
+        if rt.active:
+            status = self.db.execute(
+                "SELECT status FROM requests WHERE conversation=? AND id=?",
+                (cid, rt.active),
+            ).fetchone()[0]
+            if status == "starting":
+                # Nothing has crossed the native write boundary. Cancellation
+                # returns this request to the queue and owns worker cleanup.
+                assert rt.task is not None
+                rt.task.cancel()
+            elif mode == "now":
+                self._schedule_interrupt(cid)
+        rt.wake.set()
+
+    def resume(self, cid: str, *, expected: str | None = None) -> None:
+        rt = self._eligible(cid, "resume", expected)
         with self.db:
             self.db.execute(
                 "UPDATE requests SET status='queued' WHERE conversation=? AND status='held'",
                 (cid,),
             )
+        rt.control_revision += 1
+        rt.resume_revision += 1
         self._change(cid, paused=0, state="idle", error="")
+        try:
+            self._ensure_worker(cid)
+        except Exception:
+            self._change(cid, paused=1, state="paused")
+            raise
         rt.wake.set()
+
+    def archive(self, cid: str, *, expected: str | None = None) -> None:
+        self._eligible(cid, "archive", expected)
+        self._change(cid, archived=1, paused=1, state="archived")
+
+    def restore(self, cid: str, *, expected: str | None = None) -> None:
+        self._eligible(cid, "restore", expected)
+        self._change(cid, archived=0, paused=1, state="paused")
 
     def discard(self, cid: str, request_id: str) -> None:
         self._row(cid)
@@ -571,6 +724,7 @@ class Conversations:
             )
         if not result.rowcount:
             raise Conflict("only queued or held messages can be discarded")
+        rt.control_revision += 1
         if rt.redirect == request_id:
             rt.redirect = None
         self._change(cid)
@@ -585,6 +739,7 @@ class Conversations:
             )
         if not result.rowcount:
             raise Conflict("request is not uncertain")
+        self._rt(cid).control_revision += 1
         self._record(
             cid,
             request_id,
@@ -616,8 +771,15 @@ class Conversations:
         try:
             if rt.turn_done.is_set():
                 return
+            # "running" is committed before native submission, whereas "started"
+            # arrives after its acknowledgement. Wait for either that ACK or a
+            # terminal result; a missing ACK must never make replay safe.
+            await asyncio.wait_for(rt.native_ready.wait(), INTERRUPT_TIMEOUT)
+            if rt.turn_done.is_set():
+                return
             assert rt.adapter is not None
-            await asyncio.wait_for(rt.adapter.interrupt(), INTERRUPT_TIMEOUT)
+            if not rt.terminal:
+                await asyncio.wait_for(rt.adapter.interrupt(), INTERRUPT_TIMEOUT)
             # A native ACK only confirms receipt. Do not run the redirect until
             # the old turn iterator has ended, including its transport cleanup.
             await asyncio.wait_for(rt.turn_done.wait(), INTERRUPT_COMPLETION_TIMEOUT)
@@ -661,11 +823,11 @@ class Conversations:
     async def _worker(self, cid: str) -> None:
         rt = self._rt(cid)
         try:
-            while not rt.closing:
+            while not rt.closing and not rt.retire:
                 rt.wake.clear()
                 row = self._row(cid)
                 job = None
-                if not rt.interrupting:
+                if not rt.interrupting and not row["paused"] and not row["archived"]:
                     if rt.redirect:
                         job = self.db.execute(
                             "SELECT * FROM requests WHERE conversation=? AND id=? AND status='queued'",
@@ -680,8 +842,9 @@ class Conversations:
                 if job is None:
                     await rt.wake.wait()
                     continue
-                rt.active, rt.started = job["id"], False
+                rt.active, rt.started, rt.terminal = job["id"], False, False
                 rt.turn_done.clear()
+                rt.native_ready.clear()
                 rt.preview = ""
                 with self.db:
                     self.db.execute(
@@ -704,6 +867,13 @@ class Conversations:
                     rt.adapter = self.factory(launch)
                     native_id = await rt.adapter.open(row["native_id"])
                     self._change(cid, native_id=native_id)
+                if rt.retire or self._row(cid)["paused"]:
+                    with self.db:
+                        self.db.execute(
+                            "UPDATE requests SET status='queued' WHERE conversation=? AND id=? AND status='starting'",
+                            (cid, rt.active),
+                        )
+                    break
                 self._record(
                     cid,
                     rt.active,
@@ -719,7 +889,15 @@ class Conversations:
                 async for event in rt.adapter.run(job["text"]):
                     if event.kind == "started":
                         rt.started = True
-                        self._change(cid, state="running")
+                        rt.native_ready.set()
+                        self._change(
+                            cid,
+                            state="interrupting"
+                            if rt.interrupting
+                            else "finishing"
+                            if rt.retire
+                            else "running",
+                        )
                         if rt.redirect or rt.closing:
                             self._schedule_interrupt(cid)
                     elif event.kind == "session":
@@ -745,6 +923,8 @@ class Conversations:
                         }
                     elif event.kind == "completed":
                         terminal = True
+                        rt.terminal = True
+                        rt.native_ready.set()
                         status = event.data.get("status", "failed")
                         if status not in ("completed", "interrupted"):
                             status = "failed"
@@ -765,16 +945,26 @@ class Conversations:
                 if not terminal:
                     raise ConnectionError("native stream ended without a turn result")
                 rt.turn_done.set()
+                rt.native_ready.set()
                 rt.active, rt.started, rt.preview = None, False, ""
                 rt.approvals.clear()
                 self._change(
                     cid, state="paused" if self._row(cid)["paused"] else "idle"
                 )
         except asyncio.CancelledError:
+            status = self.db.execute(
+                "SELECT status FROM requests WHERE conversation=? AND id=?",
+                (cid, rt.active),
+            ).fetchone()
+            safe_stop = rt.retire and (status is None or status[0] != "running")
             self._uncertain(
                 cid,
                 self._row(cid)["error"]
-                or "Execution stopped during the turn; inspect its outcome before resuming.",
+                or (
+                    ""
+                    if safe_stop
+                    else "Execution stopped during the turn; inspect its outcome before resuming."
+                ),
             )
             raise
         except Exception as exc:  # noqa: BLE001 — preserve uncertain native outcomes, never replay
@@ -792,6 +982,8 @@ class Conversations:
 
     async def _cleanup(self, cid: str) -> None:
         rt = self._rt(cid)
+        if self.retire_launch is not None:
+            await self.retire_launch(cid)
         if rt.control is not None and not rt.control.done():
             rt.control.cancel()
             done, _ = await asyncio.wait({rt.control}, timeout=CANCEL_GRACE)

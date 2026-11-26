@@ -18,7 +18,7 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
     await page.evaluate(() => customElements.whenDefined('arke-chat'));
     const result = await page.evaluate(async () => {
       const component = document.querySelector('arke-chat'), calls = [];
-      component.follow = () => {}; // Explicit snapshots below; stream transport is tested on the server.
+      component.follow = () => { component.render({ id: component.id, name: 'Agent', harness: 'codex', cwd: '/shared', state: 'idle', active: null, paused: false, error: '', preview: '', queue: [], approvals: [], history: [] }); }; // Explicit snapshots; transport is tested on the server.
       const request = async (path, options) => { calls.push([path, JSON.parse(options.body)]); return {}; };
       await component.open({ id: 'one', request, owner: true });
       const snapshot = { id: 'one', name: '<script>bad()</script>', harness: 'codex', cwd: '/shared', state: 'running', active: 'turn-1', paused: false, error: '', preview: '<img src=x onerror=bad()>', history: [{ seq: 1, kind: 'message', data: { text: '<script>bad()</script>' } }], queue: [], approvals: [] };
@@ -124,10 +124,10 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       const newTailAvailable = component.history.size === 100 && component.history.has(1000) && !component.history.has(2);
 
       component.owner = true;
-      component.render({ ...snapshot(records(401, 500)), queue: [{ id: 'held', text: 'Earlier task', status: 'held', origin: 'human' }] });
+      component.render({ ...snapshot(records(401, 500)), held: true, queue: [{ id: 'held', text: 'Earlier task', status: 'held', origin: 'human' }] });
       const heldControls = !component.$('resume').hidden && component.$('queue').textContent.includes('Discard');
       component.render({ ...snapshot(records(401, 500)), stopping: true, active: 'old-turn', paused: true });
-      const stoppingControls = component.$('resume').hidden && component.$('interrupt').disabled && component.$('status').textContent.includes('stopping');
+      const stoppingControls = component.$('resume').disabled && component.$('interrupt').disabled && component.$('status').textContent.includes('Cleaning up');
       return { disjointReset, allRecovered, exhaustionPersisted, staleHistoryIgnored, readingWindowPreserved, newTailAvailable, heldControls, stoppingControls, calls };
     });
     for (const [name, passed] of Object.entries(history)) if (name !== 'calls') assert.ok(passed, name);
@@ -179,6 +179,44 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       return { snapshotPreserved, detailsPreserved, rowBound, oldestReachable, readingPreserved, latestReachable, byteBound, readableError, fullOutput, releasedOutput, staleDetailIgnored };
     });
     for (const [name, passed] of Object.entries(bounded)) assert.ok(passed, name);
+    const lifecycle = await page.evaluate(async () => {
+      const component = document.querySelector('arke-chat');
+      await component.open({ id: 'lifecycle', request: async () => ({}), owner: true });
+      const base = { ...component.snapshot, control_token: 'epoch:1', paused: true,
+        controls: Object.fromEntries(['stop', 'stop_now', 'resume', 'archive', 'restore'].map(name => [name, { allowed: true, reason: '' }])) };
+      component.render(base);
+      const calls = [], controlling = [];
+      const listener = () => controlling.push(component.controlling);
+      component.addEventListener('lifecycle-change', listener);
+      component.request = async (path, options) => {
+        calls.push([path, options?.body && JSON.parse(options.body)]);
+        if (options) { const error = new Error('controls changed'); error.status = 409; throw error; }
+        return { ...base, control_token: 'epoch:2' };
+      };
+      await component.lifecycle('stop', 'now');
+      component.removeEventListener('lifecycle-change', listener);
+      const hostControlsReleased = controlling[0] === true && controlling.at(-1) === false;
+      const staleControlRefreshed = calls.length === 2 && calls[0][1].expected_control === 'epoch:1' && calls[0][1].expected_active === null && component.snapshot.control_token === 'epoch:2';
+      let finish;
+      component.request = () => new Promise(resolve => { finish = resolve; });
+      component.$('message').value = 'accepted before archive';
+      const sending = component.send();
+      component.render({ ...base, archived: true });
+      finish({}); await sending;
+      const archivedSendStaysDisabled = component.$('send').disabled && component.$('message').disabled;
+      component.render(base);
+      const sent = [];
+      component.request = async (path, options) => { sent.push(JSON.parse(options.body)); if (sent.length === 1) throw new TypeError('response lost'); return {}; };
+      component.$('message').value = 'check my receipt';
+      await component.send();
+      const original = JSON.stringify(component.pending);
+      component.render({ ...base, archived: true });
+      const deliveryAvailable = component.$('send').textContent === 'Check delivery' && !component.$('send').disabled;
+      await component.send();
+      const archivedReceiptRetried = JSON.stringify(sent[1]) === original && component.$('send').disabled;
+      return { hostControlsReleased, staleControlRefreshed, archivedSendStaysDisabled, deliveryAvailable, archivedReceiptRetried };
+    });
+    for (const [name, passed] of Object.entries(lifecycle)) assert.ok(passed, name);
     const streams = await page.evaluate(async () => {
       const component = document.querySelector('arke-chat');
       let complete, cancelled = false;
@@ -198,6 +236,54 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       return { lateStreamIgnored, activeCancelled };
     });
     for (const [name, passed] of Object.entries(streams)) assert.ok(passed, name);
-    console.log('ok: reusable chat, held queues, owner approvals, inert content, retry, navigation races, draft preservation, history recovery, and stream cleanup');
+    // Exercise the shell with the real component, including archived deep links
+    // and list refreshes that must preserve drafts, history, and selection.
+    const shell = await browser.newPage();
+    const state = (id, archived) => ({ id, name: id, harness: 'codex', cwd: '/shared', state: 'paused', active: null, paused: true, archived, error: '', preview: '', queue: [], approvals: [], history: [], control_token: id + ':1',
+      controls: { archive: { allowed: !archived }, restore: { allowed: archived }, resume: { allowed: !archived }, stop: { allowed: !archived }, stop_now: { allowed: !archived } } });
+    const conversations = { one: state('one', false), archived: state('archived', true) };
+    await shell.route('http://shell.test/**', async route => {
+      const url = new URL(route.request().url()), parts = url.pathname.split('/');
+      let value;
+      if (url.pathname === '/api/conversations') value = { conversations: Object.values(conversations).filter(c => !c.archived || url.searchParams.has('include_archived')), role: 'owner', shared: null, title: 'Agents', profiles: [], dashboard: true };
+      else if (url.pathname.startsWith('/api/conversations/')) {
+        const row = conversations[parts[3]];
+        if (parts[4] === 'events') return route.fulfill({ contentType: 'text/event-stream', body: 'event: snapshot\ndata: ' + JSON.stringify(row) + '\n\n' });
+        if (route.request().method() === 'POST') {
+          conversations[row.id] = { ...state(row.id, parts[4] === 'archive'), control_token: row.id + ':2' };
+          value = { conversation: conversations[row.id], synchronizing: false };
+        } else value = row;
+      } else {
+        const file = url.pathname.endsWith('.js') ? path.basename(url.pathname) : url.pathname.endsWith('.css') ? 'chat.css' : 'chat.html';
+        return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: fs.readFileSync(path.join(__dirname, '../web', file), 'utf8') });
+      }
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) });
+    });
+    await shell.goto('http://shell.test/chat#archived');
+    await shell.locator('#key').fill('owner-key');
+    await shell.locator('#login button').click();
+    await shell.waitForFunction(() => document.querySelector('arke-chat').snapshot?.id === 'archived');
+    assert.equal(await shell.locator('arke-chat #send').isDisabled(), true);
+    await shell.locator('#select').selectOption('one');
+    await shell.waitForFunction(() => document.querySelector('arke-chat').snapshot?.id === 'one');
+    await shell.locator('arke-chat #message').fill('preserve this draft');
+    const generation = await shell.evaluate(() => document.querySelector('arke-chat').generation);
+    await shell.locator('#show-archived').check();
+    await shell.waitForFunction(() => document.querySelector('#select').options.length === 2);
+    assert.equal(await shell.locator('arke-chat #message').inputValue(), 'preserve this draft');
+    assert.equal(await shell.evaluate(() => document.querySelector('arke-chat').generation), generation);
+    await shell.locator('#archive').click();
+    await shell.waitForFunction(() => document.querySelector('arke-chat').snapshot?.archived);
+    assert.equal(await shell.locator('arke-chat #message').inputValue(), 'preserve this draft');
+    await shell.locator('#show-archived').uncheck();
+    await shell.waitForFunction(() => document.querySelector('#select').options.length === 1);
+    assert.equal(await shell.locator('#select').inputValue(), 'one');
+    assert.equal(await shell.locator('arke-chat').isVisible(), true);
+    await shell.locator('#restore').click();
+    await shell.waitForFunction(() => !document.querySelector('arke-chat').snapshot?.archived);
+    assert.equal(await shell.evaluate(() => document.querySelector('arke-chat').snapshot.paused), true);
+    assert.equal(await shell.locator('arke-chat #message').inputValue(), 'preserve this draft');
+    await shell.close();
+    console.log('ok: reusable chat, held queues, owner approvals, inert content, retry, navigation races, draft preservation, history recovery, stream cleanup, lifecycle controls, and archive navigation');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

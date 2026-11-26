@@ -123,6 +123,45 @@ actual hostname/IP in `allowed_hosts`. Host and same-origin checks apply even wi
 The app does not trust forwarded headers by default. For TLS termination, an embedding server
 must configure trusted proxy handling explicitly; do not broadly trust forwarded headers.
 
+## Stopping and archiving agents
+
+The owner can use **Stop after this turn** to pause the queue immediately, finish
+any submitted turn, and release its worker. Pending approvals remain answerable.
+**Stop now** interrupts the selected turn and releases the worker after cleanup.
+Stopping during launch preparation leaves the unsent request queued. If a request
+might have reached the harness but its outcome cannot be confirmed, it stays
+uncertain until the owner inspects and resolves it.
+
+**Resume queue** releases queued and held messages after cleanup. Sending a new
+message while paused only queues it; neither a browser reconnect nor a service
+restart resumes execution. Interrupt-and-redirect cannot bypass a pause.
+
+**Archive** requires a stopped conversation with no pending or uncertain requests.
+It hides the agent from normal lists and bus discovery while keeping its identity,
+history, projects, and unread mail. New messages to its name or an old alias are
+rejected; broadcasts and project posts skip it. Retrying an already accepted
+message still returns its original receipt. **Show archived** reveals archived
+conversations; their direct links also remain usable. **Restore** leaves the
+conversation paused. Removed launch profiles do not prevent archive or restore,
+but must be restored before execution resumes. The shared household conversation
+cannot be archived.
+
+Paused agents keep unread mail in the bus inbox without creating new chat requests.
+Resume permits one fresh notification attempt for unread mail, including when an
+older notification was discarded. Existing pending notifications are reused.
+Archive is complete on the bus only after synchronization succeeds; if publication
+fails, the UI shows pending synchronization and the service retries. Startup
+reconciles saved archive state before accepting traffic.
+
+The reusable chat component owns stop/resume controls. The containing application
+owns archive/restore and the conversation list. Owner-only POST endpoints under
+`/api/conversations/{id}` are `/stop`, `/resume`, `/archive`, and `/restore`.
+Every control requires `expected_control` from the snapshot's `control_token`;
+Stop also requires `mode` (`after_turn` or `now`) and `expected_active` (the request
+ID or null). A stale control returns 409: refresh and require a new click, never
+retry it automatically against a newer turn. Archive/restore retain history;
+there is no deletion operation.
+
 ## Queue and recovery behavior
 
 * Committing a message to SQLite is the acceptance boundary. Known rejection checks happen

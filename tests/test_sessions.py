@@ -303,6 +303,9 @@ def test_unfinished_interrupt_pauses_without_running_redirect(
             assert fake.sent == ["first"]
             queue = {r["id"]: r["status"] for r in manager.snapshot(cid)["queue"]}
             assert queue == {"first": "uncertain", "redirect": "queued"}
+            # Adapter.close returning is earlier than the actor's done callback,
+            # which owns publishing readiness for Resume.
+            await until(lambda: manager._rt(cid).task is None)
             with pytest.raises(Conflict, match="uncertain"):
                 manager.resume(cid)
         finally:

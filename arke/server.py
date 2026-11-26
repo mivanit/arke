@@ -555,6 +555,17 @@ class Bus:
     def by_name(self, name: str) -> Agent | None:
         return next((a for a in self.agents.values() if a["name"] == name), None)
 
+    def name_holder(self, name: str) -> Agent | None:
+        """Managed names and aliases remain reserved even while offline."""
+        return self.by_name(name) or next(
+            (
+                a
+                for a in self.agents.values()
+                if a.get("managed") and name in a.get("aka", [])
+            ),
+            None,
+        )
+
     def message(self, mid: int) -> Message | None:
         """Caller holds cond. IDs increase on send; loading and trimming preserve order."""
         i: int = bisect_left(self.messages, mid, key=itemgetter("id"))
@@ -647,6 +658,8 @@ class Bus:
         Seat replacement is independent of the requested name. Automatic name claims exclude
         nested sessions and daemon conversations; explicit rename can claim an ended one.
         """
+        if holder.get("managed"):
+            return None
         if action == "seat":
             return (
                 "same tmux pane, newer session"
@@ -694,6 +707,8 @@ class Bus:
         event: str = body["event"]
         token: Any = body.get("process_token")
         a: Agent | None = self.agents.get(sid)
+        if a is not None and a.get("managed"):
+            return "managed conversations cannot be changed by terminal hooks", False
         old: dict[str, Any] | None = self.retired.get(sid)
         switched_back: bool = bool(
             event == "SessionStart"
@@ -739,6 +754,8 @@ class Bus:
         self, old: Agent, new: Agent, why: str, *, continuation: bool = False
     ) -> None:
         """Drop a superseded record; its unread mail and its names (current and earlier) carry over to its successor."""
+        if old.get("managed"):
+            raise HttpError(409, "managed conversation identities are reserved")
         if continuation:
             # The destination pane's settings win conflicts when an already-known session resumes here.
             # Keep its unsubscribes and default-project marker, including when it deliberately left that project.
@@ -812,7 +829,13 @@ class Bus:
         for t in to:
             if t == "*":
                 kinds.append({"name": t, "kind": "broadcast"})
-                reach.update(dict.fromkeys(a["name"] for a in self.agents.values()))
+                reach.update(
+                    dict.fromkeys(
+                        a["name"]
+                        for a in self.agents.values()
+                        if not a.get("managed_archived")
+                    )
+                )
             elif t == "human":
                 kinds.append({"name": t, "kind": "human"})
                 reach["human"] = None
@@ -821,12 +844,16 @@ class Bus:
                 hit: list[str] = [
                     a["name"]
                     for a in self.agents.values()
-                    if any(sub and under(p, t) for p, sub in a["projects"].items())
+                    if not a.get("managed_archived")
+                    and any(sub and under(p, t) for p, sub in a["projects"].items())
                 ]
                 if hit:
                     reach.update(dict.fromkeys(hit))
                 elif any(
-                    under(p, t) for a in self.agents.values() for p in a["projects"]
+                    under(p, t)
+                    for a in self.agents.values()
+                    if not a.get("managed_archived")
+                    for p in a["projects"]
                 ):
                     unsubscribed.append(t)
                 else:
@@ -838,6 +865,10 @@ class Bus:
                 if self.by_name(t):
                     # the current holder wins; say so if the name also belonged to someone else before
                     kinds.append({"name": t, "kind": "agent"})
+                    if (self.by_name(t) or {}).get("managed_archived"):
+                        raise HttpError(
+                            409, f"{t} is archived; restore it before sending"
+                        )
                     reach[t] = None
                     if was:
                         ambiguous.append(
@@ -846,6 +877,10 @@ class Bus:
                 elif len(was) == 1:
                     # an old name (renamed, or carried over by the session that replaced it): deliver to the current one
                     kinds.append({"name": was[0], "kind": "agent", "was": t})
+                    if (self.by_name(was[0]) or {}).get("managed_archived"):
+                        raise HttpError(
+                            409, f"{t} is archived; restore it before sending"
+                        )
                     reach[was[0]] = None
                     renamed.append({"old": t, "new": was[0]})
                 else:
@@ -1146,6 +1181,8 @@ class Bus:
 
     def register(self, sid: str, body: dict[str, Any]) -> Agent:
         """New session: choose a free name or an eligible terminal replacement; supersede our seat."""
+        if self.agents.get(sid, {}).get("managed"):
+            raise HttpError(409, "managed conversation identities are reserved")
         kind: str = clean(body.get("kind") or "agent", 12) or "agent"
         # earlier sessions in this exact tmux pane (a restart); a name chosen with `arke name` sticks to the seat
         seat: list[Agent] = [
@@ -1168,7 +1205,7 @@ class Bus:
         self.agents[sid] = a
         blocked: list[str] = []
         for c in wanted:
-            holder: Agent | None = self.by_name(c)
+            holder: Agent | None = self.name_holder(c)
             if holder is None or self.replacement_reason(holder, body, "register"):
                 a["name"] = c
                 if holder is not None:
@@ -1186,7 +1223,7 @@ class Bus:
             while True:
                 suffix: str = f"-{i}"
                 candidate: str = wanted[-1][: 40 - len(suffix)] + suffix
-                if not self.by_name(candidate):
+                if not self.name_holder(candidate):
                     a["name"] = candidate
                     break
                 i += 1
@@ -1243,7 +1280,7 @@ class Bus:
                     400,
                     "rename yourself from inside the agent (`arke name NEW`), or as human with {agent, name}",
                 )
-            holder: Agent | None = self.by_name(new)
+            holder: Agent | None = self.name_holder(new)
             if holder is not None and holder is not a:
                 if not self.replacement_reason(holder, {}, "rename"):
                     raise HttpError(
@@ -1557,6 +1594,8 @@ class Bus:
                 if helper
                 else self.resolve(to, sender)
             )
+            if helper and src is not None and src.get("managed_archived"):
+                raise HttpError(409, "the parent conversation is archived")
             requested_mode: str = mode
             text = message_text
             if r["unknown"] or r["unsubscribed"]:
@@ -2627,6 +2666,8 @@ class Bus:
         )
         selected: list[Agent] = []
         for a in self.agents.values():
+            if a.get("managed_archived"):
+                continue
             if project and not any(under(p, project) for p in a["projects"]):
                 continue
             if observer is not None and (
@@ -2737,8 +2778,9 @@ class Bus:
 
     def project_tree(self) -> list[dict[str, Any]]:
         with self.cond:
+            agents = [a for a in self.agents.values() if not a.get("managed_archived")]
             paths: set[str] = set()
-            for a in self.agents.values():
+            for a in agents:
                 for p in a["projects"]:
                     parts: list[str] = p.split("/")[1:]
                     paths.update(
@@ -2748,12 +2790,11 @@ class Bus:
                 {
                     "path": p,
                     "members": sum(
-                        any(under(q, p) for q in a["projects"])
-                        for a in self.agents.values()
+                        any(under(q, p) for q in a["projects"]) for a in agents
                     ),
                     "subscribed": sum(
                         any(s and under(q, p) for q, s in a["projects"].items())
-                        for a in self.agents.values()
+                        for a in agents
                     ),
                     "color": self.colors.get(p),
                 }
@@ -2807,7 +2848,8 @@ class Bus:
             agents: list[dict[str, Any]] = [
                 copy.deepcopy(a)
                 for a in self.agents.values()
-                if not project or any(under(p, project) for p in a["projects"])
+                if not a.get("managed_archived")
+                and (not project or any(under(p, project) for p in a["projects"]))
             ]
         return [self.public(a) for a in agents]
 

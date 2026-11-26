@@ -284,15 +284,29 @@ def create_app(
     async def conversations_page() -> Response:
         return FileResponse(assets() / "chat.html", media_type="text/html")
 
+    def presented(row: dict[str, Any], access: str) -> dict[str, Any]:
+        dashboard = app.state.dashboard
+        row["synchronizing"] = bool(dashboard and row["id"] in dashboard.pending)
+        if access != "owner":
+            row["controls"] = {
+                action: {"allowed": False, "reason": "Owner access required"}
+                for action in row["controls"]
+            }
+        return row
+
     @app.get("/api/conversations")
-    async def listing(request: Request) -> dict[str, Any]:
+    async def listing(
+        request: Request, include_archived: bool = False
+    ) -> dict[str, Any]:
         access = role(request)
         manager: Conversations = app.state.conversations
-        rows = manager.list_conversations()
+        rows = manager.list_conversations(
+            include_archived=include_archived and access == "owner"
+        )
         if access == "chat":
             rows = [row for row in rows if row["id"] == app.state.shared]
         return {
-            "conversations": rows,
+            "conversations": [presented(row, access) for row in rows],
             "role": access,
             "shared": app.state.shared,
             "title": config.title,
@@ -325,8 +339,8 @@ def create_app(
 
     @app.get("/api/conversations/{cid}")
     async def snapshot(cid: str, request: Request) -> dict[str, Any]:
-        role(request, cid=cid)
-        return app.state.conversations.snapshot(cid)
+        access = role(request, cid=cid)
+        return presented(app.state.conversations.snapshot(cid), access)
 
     @app.get("/api/conversations/{cid}/history")
     async def history(
@@ -342,7 +356,7 @@ def create_app(
 
     @app.get("/api/conversations/{cid}/events")
     async def events(cid: str, request: Request) -> Response:
-        role(request, cid=cid)
+        access = role(request, cid=cid)
         manager: Conversations = app.state.conversations
         rt = manager._rt(cid)
 
@@ -350,7 +364,7 @@ def create_app(
             cursor: int | None = None
             while not manager.closed:
                 changed = rt.changed
-                snapshot = manager.snapshot(cid, history_limit=0)
+                snapshot = presented(manager.snapshot(cid, history_limit=0), access)
                 for field in ("history", "has_earlier", "history_mode"):
                     snapshot.pop(field)
                 tail = manager.history_tail(cid)
@@ -389,11 +403,61 @@ def create_app(
             target=data.get("target"),
         )
 
+    @app.post("/api/conversations/{cid}/stop")
     @app.post("/api/conversations/{cid}/resume")
-    async def resume(cid: str, request: Request) -> dict[str, bool]:
+    @app.post("/api/conversations/{cid}/archive")
+    @app.post("/api/conversations/{cid}/restore")
+    async def lifecycle(cid: str, request: Request) -> Response:
         role(request, owner=True, cid=cid)
-        app.state.conversations.resume(cid)
-        return {"ok": True}
+        data = await body(request)
+        action = request.url.path.rsplit("/", 1)[-1]
+        allowed = (
+            {"expected_control", "mode", "expected_active"}
+            if action == "stop"
+            else {"expected_control"}
+        )
+        if set(data) - allowed or not isinstance(data.get("expected_control"), str):
+            raise ValueError(
+                "supply expected_control from the current conversation snapshot"
+            )
+        manager: Conversations = app.state.conversations
+        if action == "stop":
+            if (
+                data.get("mode") not in ("after_turn", "now")
+                or "expected_active" not in data
+                or (
+                    data["expected_active"] is not None
+                    and not isinstance(data["expected_active"], str)
+                )
+            ):
+                raise ValueError("supply mode and expected_active (request ID or null)")
+            manager.stop(
+                cid,
+                mode=data["mode"],
+                expected=data["expected_control"],
+                active=data["expected_active"],
+            )
+        else:
+            getattr(manager, action)(cid, expected=data["expected_control"])
+        dashboard = app.state.dashboard
+        if dashboard:
+            dashboard.pending[cid] = manager.control_token(cid)
+            try:
+                await dashboard.project(cid)
+            except Exception:  # noqa: BLE001 — durable intent survives a failed bus publication
+                return JSONResponse(
+                    {
+                        "conversation": presented(manager.snapshot(cid), "owner"),
+                        "synchronizing": True,
+                        "message": "Saved. Bus synchronization is pending; the service will retry.",
+                    },
+                    status_code=202,
+                )
+        row = presented(manager.snapshot(cid), "owner")
+        return JSONResponse(
+            {"conversation": row, "synchronizing": row["synchronizing"]},
+            status_code=202 if row["synchronizing"] else 200,
+        )
 
     @app.post("/api/conversations/{cid}/requests/{rid}/{action}")
     async def queued(

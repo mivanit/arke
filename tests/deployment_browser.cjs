@@ -108,6 +108,34 @@ const owner = 'a'.repeat(43), guest = 'b'.repeat(43);
       await chat.getByRole('button', { name: 'Resume queue', exact: true }).click();
       await allow();
       await wait(() => document.querySelector('arke-chat').snapshot.queue.length === 0);
+      // Lifecycle controls use the same restricted container runner. Stopping
+      // after a turn keeps approvals usable; resuming opens a fresh worker.
+      await send('finish then stop');
+      await approval();
+      await chat.getByRole('button', { name: 'Stop after this turn', exact: true }).click();
+      await wait(() => document.querySelector('arke-chat').snapshot.retiring);
+      await allow();
+      await wait(() => {
+        const s = document.querySelector('arke-chat').snapshot;
+        return s.paused && !s.stopping && !s.retiring && !s.active;
+      });
+      if (mode === 'dashboard') {
+        await page.locator('#archive').click();
+        await wait(() => document.querySelector('arke-chat').snapshot.archived);
+        assert.equal(await chat.locator('#send').isDisabled(), true);
+        await page.locator('#restore').click();
+        await wait(() => !document.querySelector('arke-chat').snapshot.archived);
+        assert.equal((await snapshot()).paused, true);
+      }
+      await chat.getByRole('button', { name: 'Resume queue', exact: true }).click();
+      await wait(() => !document.querySelector('arke-chat').snapshot.paused);
+      await send('stop immediately');
+      await approval();
+      await chat.getByRole('button', { name: 'Stop now', exact: true }).click();
+      await wait(() => {
+        const s = document.querySelector('arke-chat').snapshot;
+        return s.paused && !s.stopping && !s.retiring && !s.active && !s.approvals.length;
+      });
     }
     assert.deepEqual(errors, []);
     assert.equal(await chat.locator('#error').textContent(), '');
