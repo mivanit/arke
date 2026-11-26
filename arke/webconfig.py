@@ -27,6 +27,7 @@ class WebConfig:
     # Each chat credential sees only the single shared conversation. Dashboard access is owner-only.
     title: str = "Agent"
     bus_config: Path | None = None
+    assets_dir: Path | None = None
     # Paths that must never be mounted into a shared worker, including explicit
     # credential/config files outside the default state directory.
     protected_paths: tuple[Path, ...] = ()
@@ -131,6 +132,11 @@ def load(path: Path) -> WebConfig:
         dashboard=bool(web.get("dashboard", False)),
         title=web.get("title", "Agent"),
         bus_config=resolve(web["bus_config"]) if web.get("bus_config") else None,
+        assets_dir=(
+            resolve(web.get("assets_dir", ".local/web"))
+            if "assets_dir" in web or not web.get("bus_config")
+            else None
+        ),
         protected_paths=tuple(
             [path, state]
             + [

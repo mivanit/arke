@@ -6,6 +6,24 @@ permissions:
   contents: read
 
 jobs:
+  installation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.local/uv-cache
+      TMPDIR: ${{ github.workspace }}/.temp/work
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install setup tools
+        run: |
+          mkdir -p "$TMPDIR"
+          python3 -m venv .temp/ci-tools
+          .temp/ci-tools/bin/pip install --cache-dir .local/pip-cache uv==0.13.4
+      - name: Exercise installation recipes and isolated package consumers
+        run: make test-installation UV=.temp/ci-tools/bin/uv
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 25

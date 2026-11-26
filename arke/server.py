@@ -71,8 +71,9 @@ if __package__:
 else:
     import roster
 if __package__:
-    from . import settings
+    from . import assets, settings
 else:
+    import assets
     import settings
 if __package__:
     from .client import printable
@@ -123,10 +124,8 @@ HERE: Path = Path(__file__).resolve().parent  # <clone>/arke
 WEB: Path = (
     HERE / "web" if (HERE / "web").is_dir() else HERE.parent / "web"
 )  # installed package or source checkout; read per request
-ASSETS: Path = (
-    HERE.parent / ".local/web"
-)  # downloaded by install-service.py, not checked into Git
 SETTINGS: dict[str, Any] = client.SETTINGS.get("server", {})
+ASSETS: Path = settings.path(SETTINGS.get("assets_dir", ".local/web"))
 STATE_DIR: Path = settings.state_dir(SETTINGS)
 LOG_FILE: Path = settings.log_file(SETTINGS)
 CLIENT: str = client.shell_path(
@@ -233,6 +232,7 @@ class BusConfig:
     horatio_url: str
     transcript_roots: tuple[Path, ...]
     values: dict[str, Any]
+    assets_dir: Path | None = None
 
     @classmethod
     def legacy(cls) -> BusConfig:
@@ -245,6 +245,7 @@ class BusConfig:
             HORATIO_URL,
             tuple(TRANSCRIPT_ROOTS),
             SETTINGS,
+            ASSETS,
         )
 
     @classmethod
@@ -272,6 +273,7 @@ class BusConfig:
             values.get("horatio_url", ""),
             roots,
             values,
+            settings.path(values.get("assets_dir", ".local/web")),
         )
 
 
@@ -3397,11 +3399,14 @@ def dispatch(
     q = {k: v[0] for k, v in query.items()}
     parts = [unquote(p) for p in path.strip("/").split("/")]
     if page is not None:  # read per request: iterate on the pages without restarting
-        f: Path = (ASSETS if path.startswith("/vendor/") else WEB) / page
+        root = bus.config.assets_dir or ASSETS
+        f: Path = (
+            assets.directory(root) if path.startswith("/vendor/") else WEB
+        ) / page
         if not f.is_file():
             raise HttpError(
                 404,
-                f"{page} missing (vendored files: run python3 install-service.py --assets-only)",
+                f"{page} missing; install dashboard assets with python -m arke.assets install --directory PATH (checkout: make setup-assets; legacy: install-service.py --assets-only)",
             )
         return (
             200,

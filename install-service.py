@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
 from pathlib import Path
 
 # before importing settings, which needs tomllib (3.11+); ruff assumes the 3.12 we are checking for
@@ -17,53 +15,13 @@ if sys.version_info < (3, 12):  # noqa: UP036
     sys.exit(f"arke needs Python 3.12+; this is {sys.version.split()[0]}")
 ROOT: Path = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "arke"))
+import assets
 import settings
 
-THREE: str = "https://cdn.jsdelivr.net/npm/three@0.169.0/"
-# name in .local/web -> (pinned URL, sha256 of the file)
-ASSET_FILES: dict[str, tuple[str, str]] = {
-    "three.module.min.js": (
-        THREE + "build/three.module.min.js",
-        "f7cee3c7533449a1505cc12cb5128b89e3d4fd3d7ea62b05f9f5464a217472ee",
-    ),
-    "OrbitControls.js": (
-        THREE + "examples/jsm/controls/OrbitControls.js",
-        "80efaadea4f8a636a65fb0bd08bfef62f3d93a0bb94e2e7500f23176c5c07f4e",
-    ),
-    "three-LICENSE": (
-        THREE + "LICENSE",
-        "4c40a1ef62450b857c3b2aaf294936304cd552d965fbcd9d32d4c5bcf4ba4454",
-    ),
-    # the console's syntax highlighting (BSD-3-Clause, the license is in the file's header)
-    "highlight.min.js": (
-        "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js",
-        "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
-    ),
-}
 
-
-def download_assets() -> None:
-    """Download the pinned web dependencies once; generated files stay out of Git."""
-    directory: Path = ROOT / ".local/web"
-    for name, (url, digest) in ASSET_FILES.items():
-        target: Path = directory / name
-        if (
-            target.is_file()
-            and hashlib.sha256(target.read_bytes()).hexdigest() == digest
-        ):
-            continue
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data: bytes = response.read()
-        if hashlib.sha256(data).hexdigest() != digest:
-            raise ValueError(f"download checksum mismatch: {name}")
-        directory.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            dir=directory, prefix=".download-"
-        ) as temporary:
-            staged: Path = Path(temporary) / name
-            staged.write_bytes(data)
-            staged.replace(target)
-        print(f"Downloaded {target}", flush=True)
+def download_assets(directory: Path | None = None) -> None:
+    """Compatibility entry point; all download and verification logic lives in assets."""
+    print(f"Dashboard assets ready: {assets.install(directory or ROOT / '.local/web')}")
 
 
 def quote(value: str) -> str:
@@ -97,9 +55,8 @@ def main() -> None:
         download_assets()
         return
     config: Path = settings.config_file()
-    settings.server_key(
-        settings.load().get("server", {})
-    )  # validate opt-in before changing a working unit
+    values = settings.load().get("server", {})
+    settings.server_key(values)  # validate opt-in before changing a working unit
     service_command: str = " ".join(
         quote(p).replace("$", "$$")
         for p in [sys.executable, str(ROOT / "arke/server.py")]
@@ -134,7 +91,7 @@ WantedBy=default.target
             f"Carry its environment settings and command options (including --tailscale) into {config} "
             "first, then rerun with --replace. Add --no-start to install without restarting."
         )
-    download_assets()  # fail before changing the service if a required download is unavailable or invalid
+    download_assets(settings.path(values.get("assets_dir", ".local/web")))
     if not config.exists():
         config.parent.mkdir(parents=True, exist_ok=True)
         with config.open("x") as output:

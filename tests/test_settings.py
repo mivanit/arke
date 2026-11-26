@@ -242,7 +242,7 @@ class InstallationFixture:
                 (
                     "import runpy,sys\nfrom typing import Any\nfrom unittest.mock import patch\n"
                     "sys.argv=sys.argv[1:]\ng: dict[str, Any]=runpy.run_path(sys.argv[0])\n"
-                    "def skip_download() -> None: pass\n"
+                    "def skip_download(*args: Any) -> None: pass\n"
                     "with patch.dict(g['main'].__globals__, download_assets=skip_download): g['main']()\n"
                 ),
                 str(self.clone / script),
@@ -675,7 +675,8 @@ class TestAssetDownload:
             self.installer: Any = runpy.run_path(str(ROOT / "install-service.py"))[
                 "main"
             ].__globals__
-            files: Any = self.installer["ASSET_FILES"]
+            self.assets = self.installer["assets"]
+            files: Any = self.assets.ASSET_FILES
             self.data: dict[Any, Any] = {
                 url: ("fixture " + name).encode() for name, (url, _) in files.items()
             }
@@ -683,8 +684,9 @@ class TestAssetDownload:
                 name: (url, hashlib.sha256(self.data[url]).hexdigest())
                 for name, (url, _) in files.items()
             }
+            self.stack.enter_context(patch.dict(self.installer, ROOT=self.root))
             self.stack.enter_context(
-                patch.dict(self.installer, ROOT=self.root, ASSET_FILES=self.files)
+                patch.object(self.assets, "ASSET_FILES", self.files)
             )
             self.stack.enter_context(patch("builtins.print"))
             yield
@@ -700,16 +702,20 @@ class TestAssetDownload:
             self.installer["download_assets"]()
             assert fetch.call_count == len(self.files)
             for name, (url, _) in self.files.items():
-                assert (self.root / ".local/web" / name).read_bytes() == self.data[url]
+                assert (
+                    self.assets.directory(self.root / ".local/web") / name
+                ).read_bytes() == self.data[url]
             self.installer["download_assets"]()
             assert fetch.call_count == len(self.files), (
                 "reinstall works without another download"
             )
-            (self.root / ".local/web/OrbitControls.js").write_bytes(b"damaged")
+            (
+                self.assets.directory(self.root / ".local/web") / "OrbitControls.js"
+            ).write_bytes(b"damaged")
             self.installer["download_assets"]()
             assert fetch.call_count == len(self.files) + 1
             assert (
-                self.root / ".local/web/OrbitControls.js"
+                self.assets.directory(self.root / ".local/web") / "OrbitControls.js"
             ).read_bytes() == self.data[self.files["OrbitControls.js"][0]]
 
     def test_failed_download_preserves_previous_file(self) -> None:
@@ -718,7 +724,7 @@ class TestAssetDownload:
         target.write_bytes(b"previous version")
         with (
             patch("urllib.request.urlopen", return_value=io.BytesIO(b"wrong download")),
-            pytest.raises(ValueError, match="checksum mismatch"),
+            pytest.raises(ValueError, match="checksum"),
         ):
             self.installer["download_assets"]()
         with (
@@ -727,7 +733,7 @@ class TestAssetDownload:
         ):
             self.installer["download_assets"]()
         assert target.read_bytes() == b"previous version"
-        assert list(target.parent.iterdir()) == [target]
+        assert set(target.parent.iterdir()) == {target, target.parent / ".install.lock"}
 
     def test_assets_only_does_not_read_config_or_install_a_service(self) -> None:
 

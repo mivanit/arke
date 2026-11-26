@@ -17,6 +17,7 @@ SCHEMA: dict[str, dict[str, type[Any] | tuple[type[Any], ...]]] = {
         "tailscale": bool,
         "state_dir": str,
         "log_file": str,
+        "assets_dir": str,
         "ntfy_url": str,
         "horatio_url": str,
         "stale_seconds": (int, float),
@@ -130,7 +131,7 @@ def load(filename: Path | None = None) -> dict[str, Any]:
                     f"{filename}: server.{key} must be a finite number greater than zero"
                 )
             if (
-                key in ("state_dir", "log_file", "url", "key_file")
+                key in ("state_dir", "log_file", "assets_dir", "url", "key_file")
                 and not value.strip()
             ):
                 raise ValueError(f"{filename}: {section}.{key} must not be empty")

@@ -41,7 +41,13 @@ class Dashboard:
             if config.bus_config
             else server.BusConfig.legacy()
         )
-        self.protected_paths = (self.bus_config.state_dir, self.bus_config.log_file)
+        if config.assets_dir is not None:
+            self.bus_config = replace(self.bus_config, assets_dir=config.assets_dir)
+        self.protected_paths = (
+            self.bus_config.state_dir,
+            self.bus_config.log_file,
+            self.bus_config.assets_dir or server.ASSETS,
+        )
         if self.bus_config.values.get("experimental_require_key"):
             self.protected_paths += (
                 server.settings.path(

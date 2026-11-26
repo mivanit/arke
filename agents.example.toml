@@ -6,6 +6,7 @@ state_dir = ".local/conversations"
 allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
 title = "Arke agents"
 # dashboard = true
+# assets_dir = ".local/web" # dashboard only; also pass this directory to asset setup
 # bus_config = ".local/config.toml"
 
 # This example is owner-only local execution: agents have this user's machine access.

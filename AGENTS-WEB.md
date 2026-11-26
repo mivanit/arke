@@ -419,3 +419,13 @@ The older `test-live` target is an API-billed hook test and does not establish s
 Native contracts used here: [Claude SDK](https://code.claude.com/docs/en/agent-sdk/overview),
 [Claude authentication](https://code.claude.com/docs/en/authentication), and
 [Codex app-server](https://developers.openai.com/codex/app-server).
+
+## Installing dashboard assets
+
+Standalone chat does not use the dashboard's downloaded libraries. For the full dashboard,
+run `make setup-assets`, or use `python -m arke.assets install --directory /chosen/path` from
+an installed package. Set `[web].assets_dir` to that same directory (relative to the config
+file); absent an override, an explicit `bus_config` supplies its own asset setting. Without
+a bus config the default is `.local/web` beside the web config. Downloaded scripts are
+protected from shared worker mounts. `make check-assets` verifies downloads without starting
+a service, creating keys, or accessing native accounts. See README.md for dependency recipes.

@@ -8,6 +8,7 @@ experimental_require_key = false     # experimental, NO GUARANTEES; see DOCS.md 
 # key_file = ".local/key"             # the default; used only when experimental_require_key = true
 # state_dir = ".local/server"
 # log_file = ".local/server/log.jsonl"
+# assets_dir = ".local/web" # downloaded dashboard libraries, outside agent workspaces
 ntfy_url = ""                         # empty disables phone notifications
 # Horatio (https://github.com/mivanit/horatio) is a separate machine-history service; set its URL to show
 # CPU/memory history on the analytics pages.

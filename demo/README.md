@@ -3,7 +3,7 @@
 The console, the analytics page and the 3D page running on invented data, with no bus behind them.
 
 ```bash
-python3 install-service.py --assets-only   # once: the Three.js and highlight.js files
+make setup-assets                          # once: pinned dashboard libraries
 make demo                                  # builds _site/ and serves it on http://localhost:8000/
 ```
 
