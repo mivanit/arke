@@ -86,12 +86,13 @@ class Dashboard:
     async def prepare_launch(self, cid: str, launch: Launch) -> Launch:
         if "arke" in launch.mcp_servers:
             raise ValueError("the dashboard reserves the MCP server name arke")
-        # Registration is synchronous with launch, not dependent on the periodic mailbox pass.
-        # Allocate before any await: a canceled preparation cannot later issue a
-        # fresh capability from a shielded bus thread after cleanup revoked it.
+        # Publish the current state before issuing this worker's capability:
+        # a delayed archive from before Restore must not revoke the new worker.
+        await self.project(cid)
+        # Issue on the event-loop owner, with no intervening await. Canceled
+        # preparation cannot issue a token from a lingering bus thread.
         token = secrets.token_urlsafe(32)
         self.capabilities[cid] = token
-        await self.project(cid)
         return replace(
             launch,
             bus_call=lambda tool, data: self.call_tool(cid, tool, data, token),
@@ -194,12 +195,18 @@ class Dashboard:
         row = self.conversations.snapshot(cid, history_limit=0)
         if not ids or row["paused"] or row["archived"]:
             return
-        resume = self.conversations._rt(cid).resume_revision
+        runtime = self.conversations._rt(cid)
+        resume = runtime.resume_revision
         fresh = resume > self.resumes.get(cid, 0)
         records = self.conversations.db.execute(
             "SELECT id,status FROM requests WHERE conversation=? AND origin='bus' ORDER BY seq DESC",
             (cid,),
         ).fetchall()
+        # Existing work consumes the explicit Resume attempt even if it
+        # finished (or was discarded) before this mailbox poll got to run.
+        if fresh and any(r["id"] in runtime.resumed_requests for r in records):
+            self.resumes[cid] = resume
+            fresh = False
         if any(
             r["status"] in ("queued", "held", "starting", "running", "uncertain")
             for r in records
@@ -293,7 +300,7 @@ class Dashboard:
                 self.stopped = True
 
     async def call_tool(
-        self, cid: str, tool: str, data: dict[str, Any], token: str | None = None
+        self, cid: str, tool: str, data: dict[str, Any], token: str
     ) -> Any:
         try:
             return await self.execution.call(self.tool, cid, tool, data, token)
@@ -361,7 +368,7 @@ class Dashboard:
             return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
     def tool(
-        self, cid: str, tool: str, data: dict[str, Any], token: str | None = None
+        self, cid: str, tool: str, data: dict[str, Any], token: str
     ) -> dict[str, Any] | list[Any]:
         # The shielded thread can outlive its caller. Validate at the actual
         # commit lock, not only when the callback/HTTP request was accepted.
@@ -370,7 +377,8 @@ class Dashboard:
             if (
                 agent is None
                 or agent.get("managed_archived")
-                or (token is not None and self.capabilities.get(cid) != token)
+                or not token
+                or self.capabilities.get(cid) != token
             ):
                 raise self.server.HttpError(409, "this agent execution has retired")
             return self._tool(cid, tool, data)

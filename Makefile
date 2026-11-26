@@ -62,6 +62,7 @@ test-python: prepare
 test-browser: prepare
 	$(UV) run --locked --all-extras $(NODE) tests/test_console.cjs
 	$(UV) run --locked --all-extras $(NODE) tests/test_chat.cjs
+	$(UV) run --locked --all-extras python -m tests.deployment_ci --local-fixtures
 
 # Downloads test dependencies and 3D assets; does not install or start the service.
 setup-browser: setup-assets

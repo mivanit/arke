@@ -26,6 +26,7 @@ function controls(snapshot = chat.snapshot) {
 function select(id) {
   $('select').value = id || '';
   if (id === selected) { controls(); return; }
+  loading++; // Invalidate list/deep-link reads from the previous selection.
   selected = id;
   history.replaceState(null, '', location.pathname + (id ? '#' + encodeURIComponent(id) : ''));
   chat.hidden = !id;
@@ -45,7 +46,7 @@ async function load(preferred) {
       const row = await request('/api/conversations/' + encodeURIComponent(candidate));
       if (generation !== loading) return;
       next.conversations.push(row);
-    } catch (error) { if (error.status !== 404) throw error; }
+    } catch (error) { if (generation !== loading) return; if (error.status !== 404) throw error; }
   }
   if (generation !== loading) return;
   info = next;

@@ -1,4 +1,7 @@
-"""Credential-free deployment acceptance. Docker and an installed browser are required.
+"""Credential-free deployment acceptance. Requires an installed browser.
+
+Default mode requires Docker. --local-fixtures exercises web/worker integration
+with scripted native processes, without asserting container isolation.
 
 Run `make test-deployment`. Only synthetic state is mounted into workers; native
 CLI probes and managed workers all run with Docker networking disabled. The
@@ -14,8 +17,10 @@ import json
 import os
 import shutil
 import socket
+import sys
 import tempfile
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -42,7 +47,7 @@ class OfflineRunner(Runner):
         return command
 
 
-def fixtures(workspace: Path, harness: str) -> None:
+def fixtures(workspace: Path, harness: str, *, local: bool = False) -> None:
     source = CODEX_FIXTURE if harness == "codex" else CLAUDE_FIXTURE
     # Record protocol traffic to verify native resume rather than a fresh session.
     source = source.replace(
@@ -80,7 +85,8 @@ def bus():
     )
     source = source.replace("        turn += 1", "        turn += 1\n        bus()")
     executable = workspace / "native-fixture"
-    executable.write_text("#!/app/.venv/bin/python\n" + source)
+    python = sys.executable if local else "/app/.venv/bin/python"
+    executable.write_text(f"#!{python}\n" + source)
     executable.chmod(0o700)
 
 
@@ -156,9 +162,24 @@ runpy.run_module('tests.native_execution', run_name='__main__')
 
 
 @contextlib.asynccontextmanager
-async def serving(config: WebConfig, runners: list[Runner]) -> AsyncGenerator[str]:
+async def serving(
+    config: WebConfig, runners: list[Runner], *, local: bool = False
+) -> AsyncGenerator[str]:
     def factory(launch: Launch) -> Runner:
-        runner = OfflineRunner(launch)
+        # Only our scripted executable runs in this mode. The production
+        # container path remains the default and keeps its removal assertions.
+        runner = (
+            Runner(
+                replace(
+                    launch,
+                    runner="local",
+                    native_home=None,
+                    executable=str(launch.cwd / "native-fixture"),
+                )
+            )
+            if local
+            else OfflineRunner(launch)
+        )
         runners.append(runner)
         return runner
 
@@ -185,7 +206,11 @@ async def serving(config: WebConfig, runners: list[Runner]) -> AsyncGenerator[st
             await asyncio.wait_for(task, 60)
     assert app.state.conversations.closed
     for runner in runners:
-        await removed(runner)
+        if local:
+            assert runner.container is None
+            assert runner.process is not None and runner.process.returncode is not None
+        else:
+            await removed(runner)
 
 
 async def browser(url: str, mode: str, phase: str, cid: str = "") -> str:
@@ -209,7 +234,9 @@ async def browser(url: str, mode: str, phase: str, cid: str = "") -> str:
             await process.wait()
 
 
-async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None:
+async def managed(
+    image: str, root: Path, harness: str, dashboard: bool, *, local: bool = False
+) -> None:
     mode = "dashboard" if dashboard else "standalone"
     root.mkdir(parents=True)
     profiles = {}
@@ -217,7 +244,7 @@ async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None
         workspace, home = root / name / "workspace", root / name / "home"
         workspace.mkdir(parents=True)
         home.mkdir()
-        fixtures(workspace, harness)
+        fixtures(workspace, harness, local=local)
         profiles[name] = Launch(
             harness,
             workspace,
@@ -240,13 +267,13 @@ async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None
         bus_config=bus,
     )
     runners: list[Runner] = []
-    async with serving(config, runners) as url:
+    async with serving(config, runners, local=local) as url:
         cid = await browser(url, mode, "initial")
     assert runners, "browser did not start a worker"
     workspace = profiles["private" if dashboard else "shared"].cwd
     before = (workspace / "protocol.jsonl").read_text()
     resumed: list[Runner] = []
-    async with serving(config, resumed) as url:
+    async with serving(config, resumed, local=local) as url:
         # Startup and a browser reading state must not launch/replay native work.
         async with httpx.AsyncClient(base_url=url, trust_env=False) as client:
             result = await client.get(
@@ -276,8 +303,12 @@ async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None
         turns = [r["params"] for r in records if r.get("method") == "turn/start"]
         assert turns
         assert all(
-            turn["sandboxPolicy"]
-            == {"type": "externalSandbox", "networkAccess": "enabled"}
+            (
+                "sandboxPolicy" not in turn
+                if local
+                else turn["sandboxPolicy"]
+                == {"type": "externalSandbox", "networkAccess": "enabled"}
+            )
             and turn["approvalPolicy"] == "untrusted"
             and turn["approvalsReviewer"] == "user"
             for turn in turns
@@ -291,12 +322,12 @@ async def managed(image: str, root: Path, harness: str, dashboard: bool) -> None
         assert any("--resume=claude-fixture" in r.get("argv", []) for r in records)
     assert any(r.get("bus") == "passed" for r in records) == dashboard
     print(
-        f"Passed {harness} {mode}: browser creation/chat, approvals, redirect/held queue, recovery/resume, bus isolation, container cleanup.",
+        f"Passed {harness} {mode} ({'scripted local workers' if local else 'container workers'}): browser chat, approvals, redirect, restart, stop/resume, archive/restore, scoped bus calls, worker cleanup.",
         flush=True,
     )
 
 
-async def check(image: str, root: Path) -> None:
+async def check(image: str, root: Path, *, local: bool = False) -> None:
     # Do not inherit vendor overrides, owner homes, proxy credentials or bus IDs.
     env = {
         key: value
@@ -316,21 +347,31 @@ async def check(image: str, root: Path) -> None:
     os.environ.update(
         env | {"HOME": str(home), "TMPDIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1"}
     )
-    boundary_check(image, root)
-    await image_probes(image, root / "image")
+    if not local:
+        boundary_check(image, root)
+        await image_probes(image, root / "image")
     for harness in ("claude", "codex"):
         for dashboard in (False, True):
-            await managed(image, root / f"{harness}-{dashboard}", harness, dashboard)
+            await managed(
+                image, root / f"{harness}-{dashboard}", harness, dashboard, local=local
+            )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="arke-agent:local")
+    parser.add_argument(
+        "--local-fixtures",
+        action="store_true",
+        help="Run only scripted web/worker acceptance locally; no Docker or installed native CLIs",
+    )
     args = parser.parse_args()
-    root = ROOT / ".temp/deployment"
+    root = ROOT / (
+        ".temp/web-acceptance" if args.local_fixtures else ".temp/deployment"
+    )
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=root) as temp:
-        asyncio.run(check(args.image, Path(temp)))
+        asyncio.run(check(args.image, Path(temp), local=args.local_fixtures))
 
 
 if __name__ == "__main__":

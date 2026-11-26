@@ -310,3 +310,77 @@ def test_http_archive_reports_pending_publication_and_retries(
         client.portal.call(dashboard.sync_agents)
         assert not client.get(path, headers=OWNER).json()["synchronizing"]
         assert dashboard.bus.agents["managed-" + cid]["managed_archived"]
+
+
+def test_existing_notification_consumes_resume_even_before_poll(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        manager, dashboard = setup(tmp_path)
+        cid = manager.create("code")
+        try:
+            manager.stop(cid)
+            await dashboard.project(cid)
+            agent = dashboard.bus.agents["managed-" + cid]
+            receipt = dashboard.bus.send(
+                "human", {"to": [agent["name"]], "text": "unread"}
+            )
+            manager.submit(cid, f"bus-{receipt['id']}", "already pending", origin="bus")
+            manager.resume(cid)
+            await until(lambda: manager._rt(cid).started)
+            adapter = manager._rt(cid).adapter
+            assert isinstance(adapter, FakeAdapter)
+            adapter.finish()  # Deliberately leave mail unread, as a failed/partial handler may do.
+            await until(lambda: manager._rt(cid).active is None)
+            dashboard.notify(cid, [receipt["id"]])
+            assert not manager.snapshot(cid)["queue"], (
+                "Resume must not authorize a second attempt"
+            )
+            assert adapter.sent == ["already pending"]
+            newer = dashboard.bus.send(
+                "human", {"to": [agent["name"]], "text": "new input"}
+            )
+            dashboard.notify(cid, [receipt["id"], newer["id"]])
+            assert len(manager.snapshot(cid)["queue"]) == 1
+        finally:
+            await manager.close()
+            await dashboard.stop()
+
+    asyncio.run(scenario())
+
+
+def test_late_archive_publication_cannot_revoke_new_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        manager, dashboard = setup(tmp_path)
+        cid = manager.create("code")
+        release = asyncio.Event()
+        try:
+            await dashboard.project(cid)
+            manager.stop(cid)
+            manager.archive(cid)
+            old_archive = dashboard.projection(cid)
+            manager.restore(cid)
+            entered = asyncio.Event()
+            project = dashboard.project
+
+            async def delayed(cid: str) -> list[int]:
+                entered.set()
+                await release.wait()
+                return await project(cid)
+
+            monkeypatch.setattr(dashboard, "project", delayed)
+            preparing = asyncio.create_task(
+                dashboard.prepare_launch(cid, manager.profiles["code"])
+            )
+            await entered.wait()
+            dashboard.ensure_agent(old_archive)
+            release.set()
+            launch = await preparing
+            assert launch.bus_call is not None
+            await launch.bus_call("list", {})
+        finally:
+            release.set()
+            await manager.close()
+            await dashboard.stop()
+
+    asyncio.run(scenario())

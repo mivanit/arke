@@ -76,7 +76,7 @@ export class ArkeChat extends HTMLElement {
     const generation = this.generation, request = this.request, path = this.path(suffix);
     try {
       await request(path, { method: 'POST', body: JSON.stringify(body) });
-      if (generation === this.generation) this.$('error').textContent = '';
+      if (generation === this.generation) this.$('error').textContent = this.snapshot?.error || '';
     } catch (error) { if (generation === this.generation) this.$('error').textContent = error.message; }
   }
 
@@ -92,7 +92,7 @@ export class ArkeChat extends HTMLElement {
       // A response must not replace state received through SSE while it was
       // in flight. The stream will also publish this accepted action.
       if (this.snapshot === observed) this.render(result.conversation);
-      this.$('error').textContent = ''; // Pending synchronization is shown in the live status.
+      this.$('error').textContent = this.snapshot?.error || ''; // Keep native failures received while this request was in flight.
     } catch (error) {
       if (generation !== this.generation) return;
       this.$('error').textContent = error.message;
@@ -147,7 +147,7 @@ export class ArkeChat extends HTMLElement {
       if (generation !== this.generation) return;
       this.pending = null;
       if (this.$('message').value === pending.text) { this.$('message').value = ''; this.$('interrupt').checked = false; }
-      this.$('send').textContent = 'Send'; this.$('error').textContent = '';
+      this.$('send').textContent = 'Send'; this.$('error').textContent = this.snapshot?.error || '';
     } catch (error) {
       if (generation !== this.generation) return;
       if (error.status && error.status < 500) {
@@ -208,8 +208,9 @@ export class ArkeChat extends HTMLElement {
     if (snapshot.synchronizing) this.$('status').textContent += ' · bus synchronization pending';
     if (snapshot.approvals.length && !snapshot.stopping && snapshot.state !== 'interrupting') this.$('status').textContent += ' · awaiting approval';
     if (snapshot.error) this.$('error').textContent = snapshot.error;
+    else if (previous?.error && this.$('error').textContent === previous.error) this.$('error').textContent = '';
     this.renderControls();
-    if (!previous || previous.control_token !== snapshot.control_token || previous.archived !== snapshot.archived || previous.stopping !== snapshot.stopping || previous.active !== snapshot.active) {
+    if (!previous || previous.control_token !== snapshot.control_token || previous.archived !== snapshot.archived || previous.stopping !== snapshot.stopping || previous.active !== snapshot.active || JSON.stringify(previous.controls) !== JSON.stringify(snapshot.controls)) {
       this.lifecycleChanged();
     }
     this.$('preview').textContent = snapshot.preview;

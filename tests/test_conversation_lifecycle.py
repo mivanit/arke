@@ -399,3 +399,104 @@ def test_archived_native_history_stays_protected(tmp_path: Path) -> None:
             await manager.close()
 
     asyncio.run(scenario())
+
+
+def test_rejected_stop_preserves_runtime_and_control_token(tmp_path: Path) -> None:
+    import sqlite3
+
+    async def scenario() -> None:
+        fake = FakeAdapter(Launch("codex", tmp_path))
+        manager = Conversations(
+            tmp_path / "state.db", {"code": fake.launch}, lambda _: fake
+        )
+        cid = manager.create("code")
+        try:
+            manager.submit(cid, "one", "first")
+            await until(lambda: bool(fake.sent))
+            manager.submit(cid, "redirect", "direction", redirect=True, target="one")
+            token = manager.control_token(cid)
+            manager.db.execute(
+                "CREATE TEMP TRIGGER reject_pause BEFORE UPDATE OF paused ON conversations BEGIN SELECT RAISE(FAIL, 'fixture write failure'); END"
+            )
+            with pytest.raises(sqlite3.DatabaseError, match="fixture write failure"):
+                manager.stop(cid, expected=token)
+            assert not manager._rt(cid).retire
+            assert manager._rt(cid).redirect == "redirect"
+            assert not manager.snapshot(cid)["paused"]
+            assert manager.control_token(cid) == token
+        finally:
+            manager.db.execute("DROP TRIGGER IF EXISTS reject_pause")
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_resume_failure_cannot_release_held_requests(tmp_path: Path) -> None:
+    import sqlite3
+
+    async def scenario() -> None:
+        manager = Conversations(
+            tmp_path / "state.db", {"code": Launch("codex", tmp_path)}, FakeAdapter
+        )
+        cid = manager.create("code")
+        manager.stop(cid)
+        manager.submit(cid, "held", "keep held")
+        with manager.db:
+            manager.db.execute("UPDATE requests SET status='held'")
+        token = manager.control_token(cid)
+        try:
+            manager.db.execute(
+                "CREATE TEMP TRIGGER reject_resume BEFORE UPDATE OF paused ON conversations BEGIN SELECT RAISE(FAIL, 'fixture write failure'); END"
+            )
+            with pytest.raises(sqlite3.DatabaseError, match="fixture write failure"):
+                manager.resume(cid, expected=token)
+            assert manager.snapshot(cid)["queue"][0]["status"] == "held"
+            assert manager.snapshot(cid)["paused"]
+            assert manager.control_token(cid) == token
+            assert manager._rt(cid).resume_revision == 0
+        finally:
+            manager.db.execute("DROP TRIGGER IF EXISTS reject_resume")
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_retirement_hook_failure_still_closes_native_execution(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        fake = FakeAdapter(Launch("codex", tmp_path))
+        manager = Conversations(
+            tmp_path / "state.db", {"code": fake.launch}, lambda _: fake
+        )
+        cid = manager.create("code")
+
+        async def failed_retirement(cid: str) -> None:
+            raise RuntimeError("fixture retirement failed")
+
+        manager.retire_launch = failed_retirement
+        try:
+            manager.submit(cid, "one", "first")
+            await until(lambda: bool(fake.sent))
+            manager.stop(cid)
+            fake.finish()
+            task = manager._rt(cid).task
+            assert task is not None
+            await until(task.done)
+            assert fake.closed
+            await asyncio.sleep(
+                0
+            )  # allow the actor's readiness callback to report failure
+            assert manager.snapshot(cid)["stopping"]
+            assert "cleanup failed" in manager.snapshot(cid)["error"]
+            with pytest.raises(Conflict, match="cleanup failed"):
+                manager.resume(cid)
+        finally:
+            rt = manager._rt(cid)
+            if rt.cleanup:
+                with pytest.raises(RuntimeError, match="retirement failed"):
+                    await rt.cleanup
+            manager.retire_launch = None
+            rt.cleanup = asyncio.create_task(manager._cleanup(cid))
+            await rt.cleanup
+            await manager.close()
+
+    asyncio.run(scenario())

@@ -303,7 +303,9 @@ def test_long_polls_have_separate_capacity_and_shutdown_wakes_them(
             with pytest.raises(BusBusy, match="busy"):
                 await dashboard.execution.call(lambda: None, long_poll=True)
             # Tools still have execution capacity while every long-poll slot waits.
-            assert (await dashboard.call_tool(cid, "inbox", {}))["messages"] == []
+            assert (
+                await dashboard.call_tool(cid, "inbox", {}, dashboard.capabilities[cid])
+            )["messages"] == []
             dashboard.begin_shutdown()
             results = await asyncio.wait_for(
                 asyncio.gather(*pending, return_exceptions=True), 2

@@ -383,6 +383,12 @@ initialization, effective subscription configuration, local thread creation, and
 initialization in a fresh repo-local home. It submits no model turn and does not use the owner's login. This checks
 protocol compatibility; it does not establish subscription access or model behavior.
 
+`make test-browser` also runs the full HTTP/SSE, browser, and worker lifecycle
+scenarios using scripted native processes. It needs no Docker, native login, or
+model usage. Run just that integration check with
+`uv run --locked --all-extras python -m tests.deployment_ci --local-fixtures`.
+This checks application behavior; the container tests still verify isolation.
+
 `make test-deployment` builds `Dockerfile.agent` and runs the deployment CI job locally.
 It requires Docker daemon access, the locked Python extras, Node, and Playwright/Chromium
 (`make setup-browser`). It covers:

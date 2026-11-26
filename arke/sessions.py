@@ -56,6 +56,7 @@ class Runtime:
     retire: bool = False
     control_revision: int = 0
     resume_revision: int = 0
+    resumed_requests: frozenset[str] = frozenset()
     native_ready: asyncio.Event = field(default_factory=asyncio.Event)
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -168,8 +169,6 @@ class Conversations:
         return self.runtime.setdefault(cid, Runtime())
 
     def _change(self, cid: str, **fields: Any) -> None:
-        if fields.get("paused"):
-            self._rt(cid).control_revision += 1
         if fields:
             with self.db:
                 self.db.execute(
@@ -179,6 +178,8 @@ class Conversations:
                     (*fields.values(), cid),
                 )
         rt = self._rt(cid)
+        if fields.get("paused"):
+            rt.control_revision += 1
         rt.revision += 1
         rt.changed.set()
         rt.changed = asyncio.Event()
@@ -563,7 +564,25 @@ class Conversations:
         ):
             # Retain the failed execution's ownership and error for inspection.
             rt.stopping = True
-            self._change(cid)
+            if rt.cleanup.done():
+                failure = (
+                    asyncio.CancelledError("cleanup was canceled")
+                    if rt.cleanup.cancelled()
+                    else rt.cleanup.exception()
+                )
+                assert failure is not None
+                logging.getLogger(__name__).error(
+                    "conversation cleanup failed: %s",
+                    cid,
+                    exc_info=(type(failure), failure, failure.__traceback__),
+                )
+                self._change(
+                    cid,
+                    error=self._row(cid)["error"]
+                    or "Execution cleanup failed; inspect the service logs before restarting",
+                )
+            else:
+                self._change(cid)
             return
         rt.task = None
         rt.stopping = False
@@ -664,8 +683,6 @@ class Conversations:
         rt = self._eligible(cid, "stop_now" if mode == "now" else "stop", expected)
         if mode == "now" and active != rt.active:
             raise Conflict("the targeted turn changed; refresh before stopping it")
-        rt.redirect = None
-        rt.retire = rt.task is not None
         self._change(
             cid,
             paused=1,
@@ -675,6 +692,9 @@ class Conversations:
             if rt.active
             else "paused",
         )
+        # Publish runtime intent only after the durable pause succeeds.
+        rt.redirect = None
+        rt.retire = rt.task is not None
         if rt.active:
             status = self.db.execute(
                 "SELECT status FROM requests WHERE conversation=? AND id=?",
@@ -691,14 +711,26 @@ class Conversations:
 
     def resume(self, cid: str, *, expected: str | None = None) -> None:
         rt = self._eligible(cid, "resume", expected)
+        pending = frozenset(
+            row[0]
+            for row in self.db.execute(
+                "SELECT id FROM requests WHERE conversation=? AND status IN ('queued','held')",
+                (cid,),
+            )
+        )
         with self.db:
             self.db.execute(
                 "UPDATE requests SET status='queued' WHERE conversation=? AND status='held'",
                 (cid,),
             )
+            self.db.execute(
+                "UPDATE conversations SET paused=0, state='idle', error='' WHERE id=?",
+                (cid,),
+            )
         rt.control_revision += 1
         rt.resume_revision += 1
-        self._change(cid, paused=0, state="idle", error="")
+        rt.resumed_requests = pending
+        self._change(cid)
         try:
             self._ensure_worker(cid)
         except Exception:
@@ -981,9 +1013,17 @@ class Conversations:
                 raise
 
     async def _cleanup(self, cid: str) -> None:
+        try:
+            await self._cleanup_native(cid)
+        finally:
+            # An integration failure must not skip process cleanup, and a
+            # process failure must not skip capability revocation. Readiness
+            # still requires both operations to succeed.
+            if self.retire_launch is not None:
+                await self.retire_launch(cid)
+
+    async def _cleanup_native(self, cid: str) -> None:
         rt = self._rt(cid)
-        if self.retire_launch is not None:
-            await self.retire_launch(cid)
         if rt.control is not None and not rt.control.done():
             rt.control.cancel()
             done, _ = await asyncio.wait({rt.control}, timeout=CANCEL_GRACE)

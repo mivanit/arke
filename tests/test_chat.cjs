@@ -214,7 +214,28 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
       const deliveryAvailable = component.$('send').textContent === 'Check delivery' && !component.$('send').disabled;
       await component.send();
       const archivedReceiptRetried = JSON.stringify(sent[1]) === original && component.$('send').disabled;
-      return { hostControlsReleased, staleControlRefreshed, archivedSendStaysDisabled, deliveryAvailable, archivedReceiptRetried };
+      component.render(base);
+      let eligibilityEvents = 0;
+      const eligibility = () => eligibilityEvents++;
+      component.addEventListener('lifecycle-change', eligibility);
+      component.render({ ...base, queue: [{ id: 'new', text: 'queued', status: 'queued' }], controls: { ...base.controls, archive: { allowed: false, reason: 'Discard pending messages first' } } });
+      component.removeEventListener('lifecycle-change', eligibility);
+      const hostEligibilityUpdated = eligibilityEvents === 1;
+      component.render({ ...base, error: 'native failure' });
+      component.render(base);
+      const nativeErrorCleared = component.$('error').textContent === '';
+      component.render({ ...base, error: 'native failure' });
+      component.$('error').textContent = 'unrelated request failure';
+      component.render(base);
+      const localErrorPreserved = component.$('error').textContent === 'unrelated request failure';
+      component.render(base);
+      component.request = async () => {
+        component.render({ ...base, error: 'new native failure', control_token: 'epoch:3' });
+        return { conversation: base };
+      };
+      await component.lifecycle('resume');
+      const lateSuccessKeepsNativeError = component.$('error').textContent === 'new native failure';
+      return { lateSuccessKeepsNativeError, hostControlsReleased, hostEligibilityUpdated, nativeErrorCleared, localErrorPreserved, staleControlRefreshed, archivedSendStaysDisabled, deliveryAvailable, archivedReceiptRetried };
     });
     for (const [name, passed] of Object.entries(lifecycle)) assert.ok(passed, name);
     const streams = await page.evaluate(async () => {
@@ -242,6 +263,7 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
     const state = (id, archived) => ({ id, name: id, harness: 'codex', cwd: '/shared', state: 'paused', active: null, paused: true, archived, error: '', preview: '', queue: [], approvals: [], history: [], control_token: id + ':1',
       controls: { archive: { allowed: !archived }, restore: { allowed: archived }, resume: { allowed: !archived }, stop: { allowed: !archived }, stop_now: { allowed: !archived } } });
     const conversations = { one: state('one', false), archived: state('archived', true) };
+    let holdDeepLink, deepLinkEntered;
     await shell.route('http://shell.test/**', async route => {
       const url = new URL(route.request().url()), parts = url.pathname.split('/');
       let value;
@@ -252,7 +274,10 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
         if (route.request().method() === 'POST') {
           conversations[row.id] = { ...state(row.id, parts[4] === 'archive'), control_token: row.id + ':2' };
           value = { conversation: conversations[row.id], synchronizing: false };
-        } else value = row;
+        } else {
+          if (holdDeepLink && row.id === 'archived') { deepLinkEntered(); await holdDeepLink; }
+          value = row;
+        }
       } else {
         const file = url.pathname.endsWith('.js') ? path.basename(url.pathname) : url.pathname.endsWith('.css') ? 'chat.css' : 'chat.html';
         return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: fs.readFileSync(path.join(__dirname, '../web', file), 'utf8') });
@@ -283,6 +308,24 @@ const { chromium } = require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright')
     await shell.waitForFunction(() => !document.querySelector('arke-chat').snapshot?.archived);
     assert.equal(await shell.evaluate(() => document.querySelector('arke-chat').snapshot.paused), true);
     assert.equal(await shell.locator('arke-chat #message').inputValue(), 'preserve this draft');
+    await shell.locator('#show-archived').check();
+    await shell.waitForFunction(() => document.querySelector('#select').options.length === 2);
+    await shell.locator('#select').selectOption('archived');
+    await shell.waitForFunction(() => document.querySelector('arke-chat').snapshot?.id === 'archived');
+    let releaseDeepLink;
+    holdDeepLink = new Promise(resolve => { releaseDeepLink = resolve; });
+    const readingDeepLink = new Promise(resolve => { deepLinkEntered = resolve; });
+    await shell.locator('#show-archived').uncheck();
+    await readingDeepLink;
+    await shell.locator('#select').selectOption('one');
+    await shell.waitForFunction(() => document.querySelector('arke-chat').snapshot?.id === 'one');
+    await shell.locator('arke-chat #message').fill('draft in the new selection');
+    const response = shell.waitForResponse('http://shell.test/api/conversations/archived');
+    releaseDeepLink();
+    await (await response).finished();
+    await shell.waitForTimeout(100); // let the fulfilled read and its DOM work settle
+    assert.equal(await shell.locator('#select').inputValue(), 'one');
+    assert.equal(await shell.locator('arke-chat #message').inputValue(), 'draft in the new selection');
     await shell.close();
     console.log('ok: reusable chat, held queues, owner approvals, inert content, retry, navigation races, draft preservation, history recovery, stream cleanup, lifecycle controls, and archive navigation');
   } finally { await browser.close(); }
