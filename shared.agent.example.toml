@@ -1,0 +1,18 @@
+# Run the web service on the host. It owns Docker; the worker receives no daemon socket.
+# Create the two directories and sign in inside the dedicated native home first.
+[web]
+state_dir = ".local/shared-state"
+shared_profile = "home"
+chat_key_file = ".local/shared-state/chat.key"
+host = "127.0.0.1"
+port = 7781
+allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
+title = "Standalone agent"
+
+[profiles.home]
+harness = "claude"
+runner = "container"
+image = "arke-agent:local"
+cwd = ".local/home-workspace"
+native_home = ".local/home-native"
+instructions = "Use the tools supplied by the owner to carry out the requested tasks."

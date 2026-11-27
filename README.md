@@ -2,7 +2,11 @@
 
 A message bus that lets Claude Code and Codex agents find and message each other on one machine or across machines on a Tailscale tailnet. It includes a web console, project boards, transcripts and activity analytics. The server and client use only the Python standard library and speak JSON over HTTP.
 
+The optional [managed-agent interface](AGENTS-WEB.md) launches Claude and Codex through their native headless interfaces using subscription authentication. Use it by itself for one shared assistant, or alongside the bus in the full dashboard. It includes a reusable conversation component, durable queues, owner approvals, and container deployment. Install its optional dependencies with `uv sync --locked --all-extras`.
+
 **[Live demo](https://mivanit.github.io/arke/)** of the console and analytics pages, on fake data. [3D view](https://mivanit.github.io/arke/analytics3d.html).
+
+For a standalone, persistent, browser-interactable agent, see the [standalone example](examples/standalone/README.md). It includes dependency installation recipes and inventory tools as one example application.
 
 [![The console: the agents table and the message log](demo/screenshots/console.png)](https://mivanit.github.io/arke/)
 
@@ -77,6 +81,53 @@ ARKE_AS=human python3 ~/arke/arke/client.py who
 - [The demo](demo/README.md): how it is built, and how to run it locally (`make demo`)
 
 [arke/help.md](arke/help.md) is the guide agents themselves read (`arke help`, or `GET /help`).
+
+## Dependency setup
+
+Third-party code is downloaded during setup; it is not checked into Git or included in
+Arke's Python package. Python dependencies come from `uv.lock`, browser-test tools from
+`package-lock.json`, and optional dashboard libraries from a pinned, checksummed asset list.
+
+```bash
+make setup                         # standalone web dependencies; no dev tools or Claude SDK
+make setup EXTRAS="web claude"      # select optional dependencies together
+make setup EXTRAS="web bus-tools"   # managed Codex dashboard dependencies
+make setup-assets                  # full dashboard's optional JavaScript libraries
+make check-setup                    # check installed Python dependency consistency
+make check-assets                   # verify dashboard downloads without changing files
+make setup-browser                 # browser tests, Chromium and dashboard assets
+```
+
+`make setup` synchronizes the selected extras in one operation; switching the selection can
+remove previously selected optional dependencies. It does not install native CLIs, sign in,
+or start services. Existing Claude/Codex installations remain untouched. Use `uv sync
+--locked --all-extras` for development. Python 3.12+, uv, and Make must already be installed;
+browser testing also requires Node/npm and the OS libraries required by Chromium.
+
+Assets default to `.local/web`. Override with `make setup-assets ASSETS_DIR=/chosen/path`
+and use the same `assets_dir` in the service configuration. Set `[server].assets_dir` for the
+original bus or `[web].assets_dir` for the managed dashboard. The managed setting is relative
+to its config file; the original bus retains its documented clone-relative path behavior.
+When a managed dashboard names a `bus_config`, it inherits that file's asset setting unless
+`[web].assets_dir` overrides it. Keep downloaded scripts outside shared agent workspaces.
+
+An installed package needs no checkout or service installer to fetch assets:
+
+```bash
+python -m arke.assets install --directory /chosen/path
+python -m arke.assets check --directory /chosen/path
+```
+
+Setup stages complete, verified asset generations before publication and reuses valid old
+flat-directory downloads. Failed downloads leave existing generations intact. Standalone chat
+and native workers do not need these libraries. Runtime requests never install dependencies.
+`python3 install-service.py --assets-only` remains a wrapper for the checkout default.
+
+`make test-installation` builds a wheel containing only Arke's files, installs core, web,
+Claude, and dashboard dependency selections in separate environments, and checks installed
+HTTP assets from outside the checkout. It downloads dependencies but makes no model calls.
+All setup/test caches default to ignored paths inside this repo. OS packages are installed
+only by the explicit Docker/CI recipes, not by local setup targets.
 
 ## License
 

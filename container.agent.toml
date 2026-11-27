@@ -1,0 +1,14 @@
+[web]
+# This whole-service example supports Claude, with owner-only access.
+# For Codex or shared chat, use the host supervisor with
+# shared.agent.example.toml and separate worker containers (AGENTS-WEB.md).
+host = "0.0.0.0"
+port = 7780
+state_dir = "/state"
+allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
+title = "Agent"
+shared_profile = "assistant"
+
+[profiles.assistant]
+harness = "claude"
+cwd = "/workspace"

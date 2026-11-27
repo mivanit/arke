@@ -7,18 +7,17 @@ The pages are otherwise unchanged. The fake answers every API request in the bro
 (or GitHub Pages under a subpath) can host the result. See demo/README.md.
 """
 
+import argparse
 import shutil
 import sys
 from pathlib import Path
 
 REPO: Path = Path(__file__).resolve().parent.parent
 WEB: Path = REPO / "web"
-VENDOR: Path = REPO / ".local" / "web"
-VENDORED: tuple[str, ...] = (
-    "three.module.min.js",
-    "OrbitControls.js",
-    "highlight.min.js",
-)
+sys.path.insert(0, str(REPO))
+from arke import assets
+
+VENDOR: Path = REPO / ".local/web"
 # console.html is the site's front page
 PAGES: dict[str, str] = {
     "console.html": "index.html",
@@ -54,14 +53,15 @@ REWRITES: list[tuple[str, str, str, int]] = [
 LEFTOVERS: tuple[str, ...] = ('src="/', 'href="/', '"/vendor/')
 
 
-def build(out: Path) -> None:
+def build(out: Path, asset_root: Path = VENDOR) -> None:
     out = out.resolve()
     if out in (REPO, WEB, REPO / "demo", REPO / "arke") or REPO.is_relative_to(out):
         sys.exit(f"refusing to build into {out}: it would overwrite the checkout")
-    missing: list[str] = [n for n in VENDORED if not (VENDOR / n).is_file()]
+    missing = assets.problems(asset_root)
+    vendor = assets.directory(asset_root)
     if missing:
         sys.exit(
-            f"missing {', '.join(missing)} in {VENDOR}: run python3 install-service.py --assets-only"
+            f"missing or invalid {', '.join(missing)} in {asset_root}: run make setup-assets"
         )
     texts: dict[str, str] = {
         p.name: p.read_text(encoding="utf-8")
@@ -84,8 +84,8 @@ def build(out: Path) -> None:
         (out / sub).mkdir(parents=True, exist_ok=True)
     for name, text in texts.items():
         (out / PAGES.get(name, name)).write_text(text, encoding="utf-8")
-    for name in VENDORED:
-        shutil.copyfile(VENDOR / name, out / "vendor" / name)
+    for name in assets.ASSET_FILES:
+        shutil.copyfile(vendor / name, out / "vendor" / name)
     shutil.copyfile(REPO / "demo" / "fake-api.js", out / "demo" / "fake-api.js")
     shutil.copyfile(REPO / "arke" / "help.md", out / "help.md")
     (out / ".nojekyll").touch()  # GitHub Pages: serve the files as they are
@@ -93,4 +93,8 @@ def build(out: Path) -> None:
 
 
 if __name__ == "__main__":
-    build(Path(sys.argv[1] if len(sys.argv) > 1 else "_site"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("outdir", type=Path, nargs="?", default=Path("_site"))
+    parser.add_argument("--assets-directory", type=Path, default=VENDOR)
+    args = parser.parse_args()
+    build(args.outdir, args.assets_directory)

@@ -14,8 +14,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import client
-from procs import process_info
+if __package__:
+    from . import client
+else:
+    import client
+if __package__:
+    from .procs import process_info
+else:
+    from procs import process_info
 
 LIFETIME_S: float = 24 * 3600
 WAIT_S: float = 20

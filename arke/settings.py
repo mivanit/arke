@@ -17,6 +17,7 @@ SCHEMA: dict[str, dict[str, type[Any] | tuple[type[Any], ...]]] = {
         "tailscale": bool,
         "state_dir": str,
         "log_file": str,
+        "assets_dir": str,
         "ntfy_url": str,
         "horatio_url": str,
         "stale_seconds": (int, float),
@@ -90,13 +91,14 @@ def server_key(values: dict[str, Any]) -> str:
     )
 
 
-def load() -> dict[str, Any]:
-    filename: Path = config_file()
+def load(filename: Path | None = None) -> dict[str, Any]:
+    explicit = filename is not None
+    filename = filename if filename is not None else config_file()
     try:
         with filename.open("rb") as stream:
             data: dict[str, Any] = tomllib.load(stream)
     except FileNotFoundError:
-        if not os.environ.get("ARKE_CONFIG"):
+        if not explicit and not os.environ.get("ARKE_CONFIG"):
             return {}
         raise
     except tomllib.TOMLDecodeError as e:
@@ -129,7 +131,7 @@ def load() -> dict[str, Any]:
                     f"{filename}: server.{key} must be a finite number greater than zero"
                 )
             if (
-                key in ("state_dir", "log_file", "url", "key_file")
+                key in ("state_dir", "log_file", "assets_dir", "url", "key_file")
                 and not value.strip()
             ):
                 raise ValueError(f"{filename}: {section}.{key} must not be empty")

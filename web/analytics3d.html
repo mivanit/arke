@@ -202,7 +202,7 @@ try {
   THREE = await import("three");
   ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
 } catch (e) {
-  showErr(`couldn't load three.js (${e.message}). On the bus host, run python3 install-service.py --assets-only.`);
+  showErr(`couldn't load three.js (${e.message}). On the bus host, run make setup-assets in the checkout, or python -m arke.assets install --directory PATH using the configured assets_dir.`);
   $("status").textContent = "not loaded"; e.reported = true;
   throw e;  // nothing below can run
 }

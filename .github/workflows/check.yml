@@ -6,6 +6,24 @@ permissions:
   contents: read
 
 jobs:
+  installation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.local/uv-cache
+      TMPDIR: ${{ github.workspace }}/.temp/work
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install setup tools
+        run: |
+          mkdir -p "$TMPDIR"
+          python3 -m venv .temp/ci-tools
+          .temp/ci-tools/bin/pip install --cache-dir .local/pip-cache uv==0.13.4
+      - name: Exercise installation recipes and isolated package consumers
+        run: make test-installation UV=.temp/ci-tools/bin/uv
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -29,3 +47,39 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Exercise real Claude and Codex hooks and tmux with scripted model replies
         run: make test-mocked RUN_FLAGS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined"
+  deployment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.local/uv-cache
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local/playwright
+      TMPDIR: ${{ github.workspace }}/.temp/ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Dependency downloads happen before acceptance. No vendor credentials or
+      # subscription homes are supplied; every native worker is network=none.
+      # Keep this job separate from harnesses: no sysctl or unconfined profiles.
+      - name: Install locked test tools and browser
+        run: |
+          mkdir -p "$TMPDIR"
+          python3 -m venv .temp/ci-tools
+          .temp/ci-tools/bin/pip install uv==0.13.4
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Check the production image, native protocols, and container-backed web agents
+        run: make test-deployment UV=.temp/ci-tools/bin/uv
+      - name: Build the standalone example and check its inventory offline
+        run: |
+          make -C examples/standalone image
+          docker run --rm --network=none --read-only --tmpfs /tmp \
+            --entrypoint /app/.venv/bin/python arke-standalone:local -B -c '
+          import runpy
+          from pathlib import Path
+          Inventory = runpy.run_path("/opt/standalone/inventory.py")["Inventory"]
+          inventory = Inventory(Path("/tmp/inventory.sqlite3"))
+          first = inventory.add_item("ci", "Lantern", "Garage", 2)
+          assert inventory.add_item("ci", "Lantern", "Garage", 2) == first
+          assert len(inventory.list_items()["items"]) == 1
+          print("Standalone image inventory passed without network or credentials")'

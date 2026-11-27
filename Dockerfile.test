@@ -11,9 +11,9 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && apt-get install -y --no-install-recommends git make tmux \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /arke
-ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never PLAYWRIGHT_BROWSERS_PATH=/arke/.local/playwright
 COPY pyproject.toml uv.lock package.json package-lock.json ./
-RUN uv sync --locked && npm ci && npx playwright install --with-deps chromium
+RUN uv sync --locked --all-extras --no-install-project && npm ci && npx playwright install --with-deps chromium
 COPY . .
-RUN python3 install-service.py --assets-only
+RUN uv sync --locked --all-extras && make setup-assets
 CMD ["make", "check"]

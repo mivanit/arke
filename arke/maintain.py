@@ -20,9 +20,18 @@ from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
 
-import settings
-import storage
-from storage import sync_dir
+if __package__:
+    from . import settings
+else:
+    import settings
+if __package__:
+    from . import storage
+else:
+    import storage
+if __package__:
+    from .storage import sync_dir
+else:
+    from storage import sync_dir
 
 if TYPE_CHECKING:
     from _hashlib import HASH

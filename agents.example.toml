@@ -1,0 +1,32 @@
+# Paths are relative to this file. This app does not load the bus unless dashboard=true.
+[web]
+host = "127.0.0.1"
+port = 7780
+state_dir = ".local/conversations"
+allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
+title = "Arke agents"
+# dashboard = true
+# assets_dir = ".local/web" # dashboard only; also pass this directory to asset setup
+# bus_config = ".local/config.toml"
+
+# This example is owner-only local execution: agents have this user's machine access.
+# For shared access use shared.agent.example.toml with an isolated container worker,
+# a dedicated workspace/native home, and separate private service state.
+# To serve a LAN, set host="0.0.0.0" and add the machine's actual IP/name to allowed_hosts.
+
+[profiles.claude]
+harness = "claude"
+runner = "local"
+cwd = "."
+instructions = ""
+
+[profiles.codex]
+harness = "codex"
+runner = "local"
+cwd = "."
+instructions = ""
+
+# Application-owned tools are ordinary MCP servers, available without the bus:
+# [profiles.claude.mcp_servers.application]
+# command = "/absolute/path/to/python"
+# args = ["/absolute/path/to/database_tools.py"]

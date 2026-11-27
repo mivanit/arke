@@ -1,0 +1,25 @@
+services:
+  # Claude owner-only example. Codex uses the host-supervisor/container-worker
+  # deployment in AGENTS-WEB.md so Docker owns its sandbox boundary.
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    init: true
+    # Allow HTTP drain and owned native cleanup before Docker kills the service.
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:7780:7780"
+    volumes:
+      - ./container.agent.toml:/app/container.agent.toml:ro
+      - ./:/workspace
+      - agent-state:/state
+      - agent-home:/home/agent
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Starting the container restores paused queues; no model turn is automatically resumed.
+volumes:
+  agent-state:
+  agent-home:

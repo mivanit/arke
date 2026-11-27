@@ -104,8 +104,14 @@ import subprocess
 import time
 from pathlib import Path
 
-import roster
-import settings
+if __package__:
+    from . import roster
+else:
+    import roster
+if __package__:
+    from . import settings
+else:
+    import settings
 
 try:
     SETTINGS: dict[str, Any] = settings.load()
@@ -1072,7 +1078,10 @@ def main() -> None:
                 )
                 native_hook: list[dict[str, Any]] = []
                 if kind == "claude":
-                    import native
+                    if __package__:
+                        from . import native
+                    else:
+                        import native
 
                     if native.supported():
                         native_hook = [
@@ -1138,7 +1147,10 @@ def main() -> None:
             case ["hook", kind] if kind in HARNESSES:
                 run_hook(kind)
             case ["listen", "claude"]:
-                import native
+                if __package__:
+                    from . import native
+                else:
+                    import native
 
                 raise SystemExit(native.listen())
             case ["who", *who_args]:

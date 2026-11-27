@@ -14,7 +14,16 @@ const read = name => fs.readFileSync(path.join(path.dirname(__dirname), 'web', n
 const readEventsSrc = (s => s.slice(s.indexOf('async function readEvents('), s.indexOf('// ---------- view state')))(read('analytics-page.js'));
 // what readEvents and load() use from the rest of analytics-page.js: a whole-log load (no checkpoint, nothing to reload)
 const wholeLog = () => ({ LIMIT: 20000, loadedFrom: -Infinity, cpHours: {}, wantedFrom: () => null, staleWindow: () => false, resetEvents() {}, loadedSpan: () => 'in the log' });
-const readAsset = name => fs.readFileSync(path.join(path.dirname(__dirname), '.local/web', name), 'utf8');
+const assetRoot = process.env.ARKE_TEST_ASSETS || path.join(path.dirname(__dirname), '.local/web');
+let assetDirectory;
+const readAsset = name => {
+  if (!assetDirectory) {
+    const resolved = spawnSync('python3', ['-m', 'arke.assets', 'path', '--directory', assetRoot], { encoding: 'utf8', cwd: path.dirname(__dirname) });
+    assert.equal(resolved.status, 0, resolved.stderr);
+    assetDirectory = resolved.stdout.trim();
+  }
+  return fs.readFileSync(path.join(assetDirectory, name), 'utf8');
+};
 function playwright() {
   try { return require(process.env.ARKE_PLAYWRIGHT_MODULE || 'playwright'); }
   catch { throw new Error('Run make setup-browser, or set ARKE_PLAYWRIGHT_MODULE to an existing installation.'); }

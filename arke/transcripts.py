@@ -19,8 +19,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import client  # shared settings (same folder)
-import settings
+if __package__:
+    from . import client
+else:
+    import client  # shared settings (same folder)
+if __package__:
+    from . import settings
+else:
+    import settings
 
 TRANSCRIPT_TAIL_BYTES: int = 2_000_000
 MAX_TEXT: int = (
@@ -264,6 +270,7 @@ def read_transcript(
     cursor: str = "",
     limit: int = 40,
     before: str = "",
+    roots: tuple[Path, ...] | None = None,
 ) -> dict[str, Any]:
     """Condensed transcript of a Claude Code or Codex session (prompts, replies, tool calls, notices) with the bus
     messages this agent sent or got merged in. Every entry has a stable `id`, so clients can merge reads idempotently.
@@ -274,7 +281,8 @@ def read_transcript(
     If a cursor no longer fits the file (new session file, rewritten, truncated) the reply is a fresh tail with
     `reset: true`: the client drops what it has and starts over."""
     resolved: Path = path.resolve()
-    if not any(resolved.is_relative_to(root) for root in TRANSCRIPT_ROOTS):
+    allowed = TRANSCRIPT_ROOTS if roots is None else roots
+    if not any(resolved.is_relative_to(root) for root in allowed):
         return {
             "available": False,
             "reason": "transcript path is outside the harness session folders; not reading it.",

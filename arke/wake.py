@@ -22,9 +22,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from procs import cmdline, process_info
-from storage import Agent, Message
-from transcripts import TRANSCRIPT_TAIL_BYTES, parse_ts, transcript_record, whole_lines
+if __package__:
+    from .procs import cmdline, process_info
+else:
+    from procs import cmdline, process_info
+if __package__:
+    from .storage import Agent, Message
+else:
+    from storage import Agent, Message
+if __package__:
+    from .transcripts import (
+        TRANSCRIPT_TAIL_BYTES,
+        parse_ts,
+        transcript_record,
+        whole_lines,
+    )
+else:
+    from transcripts import (
+        TRANSCRIPT_TAIL_BYTES,
+        parse_ts,
+        transcript_record,
+        whole_lines,
+    )
 
 TMUX_TIMEOUT_S: float = 2.0  # pane checks run under the bus lock
 

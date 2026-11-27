@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agent conversation</title>
+  <link rel="stylesheet" href="/chat/chat.css">
+  <script type="module" src="/chat/app.js"></script>
+</head>
+<body>
+  <header><h1 id="title">Agent</h1><a id="dashboard" href="/" hidden>Arke dashboard</a><button id="lock" hidden>Lock this tab</button></header>
+  <main>
+    <form id="login"><h2>Open the conversation</h2><label>Access key <input id="key" type="password" autocomplete="off" required></label><button>Open</button></form>
+    <p id="error" role="alert"></p>
+    <section id="workspace" hidden>
+      <aside id="agents"><label>Conversation <select id="select"></select></label>
+        <div id="lifecycle" hidden><label><input type="checkbox" id="show-archived"> Show archived</label><button id="archive" disabled>Archive</button><button id="restore" hidden>Restore</button></div>
+        <form id="create" hidden><h2>New agent</h2><label>Name <input name="name" maxlength="100"></label><label>Workspace and harness <select name="profile" id="profiles"></select></label>
+          <p>A fresh conversation in the selected directory. Files are shared with other agents using that directory.</p><button>Create agent</button></form>
+      </aside>
+      <arke-chat></arke-chat>
+    </section>
+  </main>
+</body>
+</html>

@@ -6,18 +6,36 @@ dependencies = []
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 
+[project.optional-dependencies]
+web = ["fastapi>=0.163.2,<0.164", "starlette>=1.3.1,<2", "uvicorn>=0.41,<1"]
+claude = ["claude-agent-sdk>=0.2.188,<0.3", "mcp>=2.3,<2.4"]
+bus-tools = ["mcp>=2.3,<2.4"]
+
+[project.scripts]
+arke-web = "arke.webapp:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["arke"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"web" = "arke/web"
+
 [dependency-groups]
-dev = ["pytest>=9", "ruff>=0.16.8", "ty>=0.0.93"]
+dev = ["pytest>=9", "ruff>=0.16.8", "ty>=0.0.93", "httpx>=0.28,<1"]
 
 [tool.uv]
-package = false
+package = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["arke"]
 
 [tool.ty.environment]
-extra-paths = ["arke"]
+extra-paths = [".", "arke"]
 
 [tool.ruff.lint]
 extend-select = ["ANN"]  # every function signature is annotated

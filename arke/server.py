@@ -50,6 +50,7 @@ from bisect import bisect_left
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import zip_longest
 from operator import itemgetter
@@ -57,34 +58,74 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, Never, TextIO
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
-import checkpoints
-import client  # shared settings (same folder)
-import roster
-import settings
-from client import printable
-from procs import cmdline, proc_table, process_info
-from storage import Agent, Message, Store
-from transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
-from wake import (
-    TMUX_TIMEOUT_S,
-    CodexRefused,
-    WakeCancelled,
-    codex_turn,
-    harness_in_pane,
-    prompt_box,
-    squash,
-    tmux_run,
-    turn_marker,
-    type_notice,
-    wake_notice,
-)
+if __package__:
+    from . import checkpoints
+else:
+    import checkpoints
+if __package__:
+    from . import client
+else:
+    import client  # shared settings (same folder)
+if __package__:
+    from . import roster
+else:
+    import roster
+if __package__:
+    from . import assets, settings
+else:
+    import assets
+    import settings
+if __package__:
+    from .client import printable
+else:
+    from client import printable
+if __package__:
+    from .procs import cmdline, proc_table, process_info
+else:
+    from procs import cmdline, proc_table, process_info
+if __package__:
+    from .storage import Agent, Message, Store
+else:
+    from storage import Agent, Message, Store
+if __package__:
+    from .transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
+else:
+    from transcripts import TRANSCRIPT_ROOTS, HttpError, read_transcript, whole_lines
+if __package__:
+    from .wake import (
+        TMUX_TIMEOUT_S,
+        CodexRefused,
+        WakeCancelled,
+        codex_turn,
+        harness_in_pane,
+        prompt_box,
+        squash,
+        tmux_run,
+        turn_marker,
+        type_notice,
+        wake_notice,
+    )
+else:
+    from wake import (
+        TMUX_TIMEOUT_S,
+        CodexRefused,
+        WakeCancelled,
+        codex_turn,
+        harness_in_pane,
+        prompt_box,
+        squash,
+        tmux_run,
+        turn_marker,
+        type_notice,
+        wake_notice,
+    )
 
 HERE: Path = Path(__file__).resolve().parent  # <clone>/arke
-WEB: Path = HERE.parent / "web"  # the console and analytics pages, read per request
-ASSETS: Path = (
-    HERE.parent / ".local/web"
-)  # downloaded by install-service.py, not checked into Git
+WEB: Path = (
+    HERE / "web" if (HERE / "web").is_dir() else HERE.parent / "web"
+)  # installed package or source checkout; read per request
 SETTINGS: dict[str, Any] = client.SETTINGS.get("server", {})
+ASSETS: Path = settings.path(SETTINGS.get("assets_dir", ".local/web"))
 STATE_DIR: Path = settings.state_dir(SETTINGS)
 LOG_FILE: Path = settings.log_file(SETTINGS)
 CLIENT: str = client.shell_path(
@@ -179,11 +220,80 @@ PROC_S: float = float(SETTINGS.get("process_interval", 15))
 HORATIO_URL: str = SETTINGS.get("horatio_url", "")  # empty = off
 
 
+@dataclass(frozen=True)
+class BusConfig:
+    """Resources owned by one bus. Legacy CLI defaults remain available separately."""
+
+    state_dir: Path
+    log_file: Path
+    stale_seconds: float
+    process_interval: float
+    ntfy_url: str
+    horatio_url: str
+    transcript_roots: tuple[Path, ...]
+    values: dict[str, Any]
+    assets_dir: Path | None = None
+
+    @classmethod
+    def legacy(cls) -> BusConfig:
+        return cls(
+            STATE_DIR,
+            LOG_FILE,
+            STALE_S,
+            PROC_S,
+            NTFY_URL,
+            HORATIO_URL,
+            tuple(TRANSCRIPT_ROOTS),
+            SETTINGS,
+            ASSETS,
+        )
+
+    @classmethod
+    def from_file(cls, filename: Path) -> BusConfig:
+        # Explicit embedding configuration never inherits another bus's ARKE_* overrides.
+        values = settings.load(filename).get("server", {})
+        state = settings.path(values.get("state_dir", ".local/server"))
+        log_file = (
+            settings.path(values["log_file"])
+            if "log_file" in values
+            else state / "log.jsonl"
+        )
+        roots = tuple(
+            settings.path(p).resolve()
+            for p in values.get(
+                "transcript_roots", ["~/.claude/projects", "~/.codex/sessions"]
+            )
+        )
+        return cls(
+            state,
+            log_file,
+            float(values.get("stale_seconds", 900)),
+            float(values.get("process_interval", 15)),
+            values.get("ntfy_url", ""),
+            values.get("horatio_url", ""),
+            roots,
+            values,
+            settings.path(values.get("assets_dir", ".local/web")),
+        )
+
+
 def log(event: str, **fields: Any) -> None:
+    write_log(LOG_FILE, event, fields)
+
+
+def write_log(path: Path, event: str, fields: dict[str, Any]) -> None:
     """Append a diagnostic event; log I/O failures must not change delivery or wake outcomes."""
     line: str = json.dumps({"ts": time.time(), "event": event, **fields})
     try:
-        with LOG_LOCK, LOG_FILE.open("a+b") as f:
+        with (
+            LOG_LOCK,
+            (
+                os.fdopen(
+                    os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600),
+                    "a+b",
+                )
+            ) as f,
+        ):
             if f.tell():
                 f.seek(-1, os.SEEK_END)
                 if f.read(1) != b"\n":
@@ -277,8 +387,16 @@ def candidates(body: dict[str, Any]) -> list[str]:
     return out
 
 
+if __package__:
+    from .managed_mail import mailbox_page
+else:
+    from managed_mail import mailbox_page
+
+
 class Bus:
-    def __init__(self, state_file: Path) -> None:
+    def __init__(self, state_file: Path, config: BusConfig | None = None) -> None:
+        self._config = config
+        self.closing = threading.Event()
         self.state_file: Path = state_file.with_suffix(".sqlite3")
         self.store: Store = Store(self.state_file)
         self.cond: threading.Condition = (
@@ -326,6 +444,29 @@ class Bus:
                 f"loaded {len(self.agents)} agents, {len(self.messages)} messages",
                 flush=True,
             )
+
+    def begin_shutdown(self) -> None:
+        """Wake long polls without waiting for a busy operation's bus lock."""
+        self.closing.set()
+        if self.cond.acquire(blocking=False):
+            try:
+                self.cond.notify_all()
+            finally:
+                self.cond.release()
+        # If the lock is busy, wait loops also recheck the flag on a short bound.
+
+    @property
+    def config(self) -> BusConfig:
+        return self._config if self._config is not None else BusConfig.legacy()
+
+    def log(self, event: str, **fields: Any) -> None:
+        if self._config is None:
+            log(event, **fields)
+        else:
+            write_log(self._config.log_file, event, fields)
+
+    def wake_failed(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return wake_failed(*args, logger=self.log, **kwargs)
 
     def save(self) -> None:
         """Mark this change() for commit; it commits before returning."""
@@ -405,7 +546,7 @@ class Bus:
                 self.pending_events = None
             self.cond.notify_all()
             for event, fields in events:
-                log(
+                self.log(
                     event, **fields
                 )  # prints a failed write (full disk); the change is already committed
 
@@ -413,6 +554,17 @@ class Bus:
 
     def by_name(self, name: str) -> Agent | None:
         return next((a for a in self.agents.values() if a["name"] == name), None)
+
+    def name_holder(self, name: str) -> Agent | None:
+        """Managed names and aliases remain reserved even while offline."""
+        return self.by_name(name) or next(
+            (
+                a
+                for a in self.agents.values()
+                if a.get("managed") and name in a.get("aka", [])
+            ),
+            None,
+        )
 
     def message(self, mid: int) -> Message | None:
         """Caller holds cond. IDs increase on send; loading and trimming preserve order."""
@@ -468,6 +620,11 @@ class Bus:
 
     def reachable(self, a: Agent) -> tuple[str, str]:
         """("yes" | "gone" | "stale", why). Only what we can actually check; unknown counts as reachable."""
+        if a.get("managed"):
+            return (
+                "yes",
+                "queue paused" if a.get("managed_paused") else "managed conversation",
+            )
         if a["state"] == "offline":
             return "yes", ""
         if a.get("host") == LOCAL_HOST and a.get("tmux") and not pane_alive(a["tmux"]):
@@ -476,7 +633,7 @@ class Bus:
                 f"its tmux pane {a['tmux'].rsplit(':', 1)[1]} no longer exists",
             )
         idle_for: float = time.time() - (a.get("last_active") or time.time())
-        if a["state"] == "busy" and idle_for > STALE_S:
+        if a["state"] == "busy" and idle_for > self.config.stale_seconds:
             return "stale", f"busy but no hook activity for {int(idle_for / 60)}m"
         return "yes", ""
 
@@ -501,6 +658,8 @@ class Bus:
         Seat replacement is independent of the requested name. Automatic name claims exclude
         nested sessions and daemon conversations; explicit rename can claim an ended one.
         """
+        if holder.get("managed"):
+            return None
         if action == "seat":
             return (
                 "same tmux pane, newer session"
@@ -548,6 +707,8 @@ class Bus:
         event: str = body["event"]
         token: Any = body.get("process_token")
         a: Agent | None = self.agents.get(sid)
+        if a is not None and a.get("managed"):
+            return "managed conversations cannot be changed by terminal hooks", False
         old: dict[str, Any] | None = self.retired.get(sid)
         switched_back: bool = bool(
             event == "SessionStart"
@@ -593,6 +754,8 @@ class Bus:
         self, old: Agent, new: Agent, why: str, *, continuation: bool = False
     ) -> None:
         """Drop a superseded record; its unread mail and its names (current and earlier) carry over to its successor."""
+        if old.get("managed"):
+            raise HttpError(409, "managed conversation identities are reserved")
         if continuation:
             # The destination pane's settings win conflicts when an already-known session resumes here.
             # Keep its unsubscribes and default-project marker, including when it deliberately left that project.
@@ -666,7 +829,13 @@ class Bus:
         for t in to:
             if t == "*":
                 kinds.append({"name": t, "kind": "broadcast"})
-                reach.update(dict.fromkeys(a["name"] for a in self.agents.values()))
+                reach.update(
+                    dict.fromkeys(
+                        a["name"]
+                        for a in self.agents.values()
+                        if not a.get("managed_archived")
+                    )
+                )
             elif t == "human":
                 kinds.append({"name": t, "kind": "human"})
                 reach["human"] = None
@@ -675,12 +844,16 @@ class Bus:
                 hit: list[str] = [
                     a["name"]
                     for a in self.agents.values()
-                    if any(sub and under(p, t) for p, sub in a["projects"].items())
+                    if not a.get("managed_archived")
+                    and any(sub and under(p, t) for p, sub in a["projects"].items())
                 ]
                 if hit:
                     reach.update(dict.fromkeys(hit))
                 elif any(
-                    under(p, t) for a in self.agents.values() for p in a["projects"]
+                    under(p, t)
+                    for a in self.agents.values()
+                    if not a.get("managed_archived")
+                    for p in a["projects"]
                 ):
                     unsubscribed.append(t)
                 else:
@@ -692,6 +865,10 @@ class Bus:
                 if self.by_name(t):
                     # the current holder wins; say so if the name also belonged to someone else before
                     kinds.append({"name": t, "kind": "agent"})
+                    if (self.by_name(t) or {}).get("managed_archived"):
+                        raise HttpError(
+                            409, f"{t} is archived; restore it before sending"
+                        )
                     reach[t] = None
                     if was:
                         ambiguous.append(
@@ -700,6 +877,10 @@ class Bus:
                 elif len(was) == 1:
                     # an old name (renamed, or carried over by the session that replaced it): deliver to the current one
                     kinds.append({"name": was[0], "kind": "agent", "was": t})
+                    if (self.by_name(was[0]) or {}).get("managed_archived"):
+                        raise HttpError(
+                            409, f"{t} is archived; restore it before sending"
+                        )
                     reach[was[0]] = None
                     renamed.append({"old": t, "new": was[0]})
                 else:
@@ -1000,6 +1181,8 @@ class Bus:
 
     def register(self, sid: str, body: dict[str, Any]) -> Agent:
         """New session: choose a free name or an eligible terminal replacement; supersede our seat."""
+        if self.agents.get(sid, {}).get("managed"):
+            raise HttpError(409, "managed conversation identities are reserved")
         kind: str = clean(body.get("kind") or "agent", 12) or "agent"
         # earlier sessions in this exact tmux pane (a restart); a name chosen with `arke name` sticks to the seat
         seat: list[Agent] = [
@@ -1022,7 +1205,7 @@ class Bus:
         self.agents[sid] = a
         blocked: list[str] = []
         for c in wanted:
-            holder: Agent | None = self.by_name(c)
+            holder: Agent | None = self.name_holder(c)
             if holder is None or self.replacement_reason(holder, body, "register"):
                 a["name"] = c
                 if holder is not None:
@@ -1040,7 +1223,7 @@ class Bus:
             while True:
                 suffix: str = f"-{i}"
                 candidate: str = wanted[-1][: 40 - len(suffix)] + suffix
-                if not self.by_name(candidate):
+                if not self.name_holder(candidate):
                     a["name"] = candidate
                     break
                 i += 1
@@ -1097,7 +1280,7 @@ class Bus:
                     400,
                     "rename yourself from inside the agent (`arke name NEW`), or as human with {agent, name}",
                 )
-            holder: Agent | None = self.by_name(new)
+            holder: Agent | None = self.name_holder(new)
             if holder is not None and holder is not a:
                 if not self.replacement_reason(holder, {}, "rename"):
                     raise HttpError(
@@ -1411,6 +1594,8 @@ class Bus:
                 if helper
                 else self.resolve(to, sender)
             )
+            if helper and src is not None and src.get("managed_archived"):
+                raise HttpError(409, "the parent conversation is archived")
             requested_mode: str = mode
             text = message_text
             if r["unknown"] or r["unsubscribed"]:
@@ -1517,7 +1702,7 @@ class Bus:
                     )  # idle agents are woken by wake_pass
             self.record("message", **m)
             self.save()
-        ntfy(m)
+        ntfy(m, self.config.ntfy_url)
         return {
             **r,
             "id": m["id"],
@@ -1548,6 +1733,8 @@ class Bus:
         deadline: float = time.time() + min(wait, MAX_WAIT_S)
         with self.cond:
             while True:
+                if self.closing.is_set():
+                    raise HttpError(503, "the bus is stopping")
                 if self.agents.get(a["sid"]) is not a:
                     raise HttpError(
                         409,
@@ -1558,7 +1745,7 @@ class Bus:
                     or time.time() >= deadline
                 ):
                     break
-                self.cond.wait(max(0.0, deadline - time.time()))
+                self.cond.wait(min(0.25, max(0.0, deadline - time.time())))
             ids: set[int] = {
                 item[0] for item in a["inbox"] if item[1] == "notify" or item[2]
             }  # board posts: `arke log`
@@ -1583,6 +1770,21 @@ class Bus:
             a["inbox"] = [item for item in a["inbox"] if item[0] not in ids]
             self.save()
         return messages
+
+    def managed_inbox(self, a: Agent) -> dict[str, Any]:
+        """Read a bounded receipt-bearing page without acknowledging unread mail."""
+        with self.cond:
+            if self.closing.is_set():
+                raise HttpError(503, "the bus is stopping")
+            if self.agents.get(a["sid"]) is not a:
+                raise HttpError(409, "this session was superseded")
+            ids = sorted(
+                {item[0] for item in a["inbox"] if item[1] == "notify" or item[2]}
+            )
+            return mailbox_page(
+                a["sid"],
+                (message for mid in ids if (message := self.message(mid)) is not None),
+            )
 
     def acknowledge(
         self, sid: str, as_name: str, body: dict[str, Any], tmux: str = ""
@@ -1703,6 +1905,8 @@ class Bus:
             self.cond.notify_all()
             try:
                 while True:
+                    if self.closing.is_set():
+                        raise HttpError(503, "the bus is stopping")
                     if self.wake_waiters.get(
                         sid
                     ) is not request or not self.listener_current(a, token):
@@ -1732,7 +1936,7 @@ class Bus:
                     if remaining <= 0:
                         return {"status": "timeout"}
                     self.cond.wait(
-                        remaining
+                        min(remaining, 0.25)
                     )  # never wait inside change(): it releases the lock
             finally:
                 if self.wake_waiters.get(sid) is request:
@@ -2060,7 +2264,7 @@ class Bus:
                         harness=snapshot,
                     )
                 else:
-                    w = wake_failed(
+                    w = self.wake_failed(
                         w, snapshot["name"], "", "no verified tmux pane for fallback"
                     )
             except Exception as e:  # noqa: BLE001 — printed with its traceback; one agent's bug mustn't stop the others' wake-ups
@@ -2135,7 +2339,7 @@ class Bus:
 
         def held(why: str, **extra: Any) -> dict[str, Any]:
             if w.get("detail") != f"waiting: {why}":
-                log("wake_held", agent=a["name"], why=why)
+                self.log("wake_held", agent=a["name"], why=why)
             # down_since only while the daemon keeps not answering
             return (
                 {k: v for k, v in w.items() if k != "down_since"}
@@ -2158,7 +2362,7 @@ class Bus:
             since: float = w.get("down_since", now)
             if now - since < CODEX_DOWN_S:
                 return held(f"its Codex daemon isn't answering ({e})", down_since=since)
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 a["name"],
                 senders,
@@ -2166,7 +2370,7 @@ class Bus:
                 error=f"codex daemon: {e}",
             )
         except Exception as e:  # noqa: BLE001 — logged with its traceback; one odd reply mustn't stop the other wake-ups
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 a["name"],
                 senders,
@@ -2177,11 +2381,11 @@ class Bus:
         if status != "started":
             # notLoaded: no Codex has it open; starting a turn would run it with nobody watching
             if status == "notLoaded":
-                return wake_failed(
+                return self.wake_failed(
                     w, a["name"], senders, "its Codex thread is notLoaded"
                 )
             return held(f"its Codex thread is {status}")
-        log(
+        self.log(
             "wake",
             agent=a["name"],
             sender=senders,
@@ -2235,7 +2439,7 @@ class Bus:
         senders: str = ", ".join(dict.fromkeys(m["from"] for m in unread))
         notice: str = wake_notice(unread)
         if not pane_alive(tmux, fresh=True):
-            return wake_failed(
+            return self.wake_failed(
                 w,
                 name,
                 senders,
@@ -2289,7 +2493,7 @@ class Bus:
                         else "can't find its prompt box"
                     )
                     if w.get("status") != "held":
-                        log("wake_held", agent=name, why=why)
+                        self.log("wake_held", agent=name, why=why)
                     return w | {
                         "status": "held",
                         "at": now,
@@ -2308,7 +2512,9 @@ class Bus:
                         if stuck
                         else "no prompt box on its screen; not typing blind"
                     )
-                    return wake_failed(w, name, senders, why, error=why.split(";")[0])
+                    return self.wake_failed(
+                        w, name, senders, why, error=why.split(";")[0]
+                    )
                 # a draft left alone: the notice goes after the whole draft, never at the cursor (which may sit
                 # mid-word): down to its last line, then to its end; if that changed the text (e.g. stepped through
                 # prompt history), give up and wait again
@@ -2337,7 +2543,7 @@ class Bus:
             if (
                 w.get("status") != "held" or w.get("detail") != f"waiting: {e}"
             ):  # once per reason, not every pass
-                log("wake_held", agent=name, why=str(e))
+                self.log("wake_held", agent=name, why=str(e))
             return w | {
                 "status": "held",
                 "at": now,
@@ -2347,7 +2553,7 @@ class Bus:
             }
         except (OSError, subprocess.TimeoutExpired) as e:
             err = f"tmux: {e}"
-        log(
+        self.log(
             "wake",
             agent=name,
             sender=senders,
@@ -2384,13 +2590,16 @@ class Bus:
                 snapshot.get("turn_offset", 0),
             )
             try:
-                if not any(path.resolve().is_relative_to(r) for r in TRANSCRIPT_ROOTS):
+                if not any(
+                    path.resolve().is_relative_to(r)
+                    for r in self.config.transcript_roots
+                ):
                     continue
                 end, found = turn_marker(path, offset)
             except OSError:
                 continue  # transcript gone or unreadable: the hooks are all there is
             except Exception as e:  # noqa: BLE001 — logged; one odd transcript mustn't stop the others' wake-ups
-                log(
+                self.log(
                     "turn_error",
                     sid=sid,
                     path=str(path),
@@ -2457,6 +2666,8 @@ class Bus:
         )
         selected: list[Agent] = []
         for a in self.agents.values():
+            if a.get("managed_archived"):
+                continue
             if project and not any(under(p, project) for p in a["projects"]):
                 continue
             if observer is not None and (
@@ -2473,12 +2684,12 @@ class Bus:
             "scope": "project" if project else "peers" if observer else "global",
             "projects": projects,
             "as_of": now,
-            "stale_seconds": STALE_S,
+            "stale_seconds": self.config.stale_seconds,
             "include_ended": show_all,
             "ended": ended,
             "total": len(selected),
             "agents": [
-                roster.describe(a, now, STALE_S)
+                roster.describe(a, now, self.config.stale_seconds)
                 for a in sorted(selected, key=itemgetter("name"))
                 if show_all or a["state"] != "offline"
             ],
@@ -2567,8 +2778,9 @@ class Bus:
 
     def project_tree(self) -> list[dict[str, Any]]:
         with self.cond:
+            agents = [a for a in self.agents.values() if not a.get("managed_archived")]
             paths: set[str] = set()
-            for a in self.agents.values():
+            for a in agents:
                 for p in a["projects"]:
                     parts: list[str] = p.split("/")[1:]
                     paths.update(
@@ -2578,12 +2790,11 @@ class Bus:
                 {
                     "path": p,
                     "members": sum(
-                        any(under(q, p) for q in a["projects"])
-                        for a in self.agents.values()
+                        any(under(q, p) for q in a["projects"]) for a in agents
                     ),
                     "subscribed": sum(
                         any(s and under(q, p) for q, s in a["projects"].items())
-                        for a in self.agents.values()
+                        for a in agents
                     ),
                     "color": self.colors.get(p),
                 }
@@ -2623,7 +2834,7 @@ class Bus:
             "local": a.get("host") == LOCAL_HOST,
             "reachable": st[0],
             "reachable_why": st[1],
-            "presence": roster.presence(a, time.time(), STALE_S),
+            "presence": roster.presence(a, time.time(), self.config.stale_seconds),
             "color": color,
             "procs": procs,
             # recent activity, trimmed: the console polls /agents every few seconds (full targets are in the event log)
@@ -2637,7 +2848,8 @@ class Bus:
             agents: list[dict[str, Any]] = [
                 copy.deepcopy(a)
                 for a in self.agents.values()
-                if not project or any(under(p, project) for p in a["projects"])
+                if not a.get("managed_archived")
+                and (not project or any(under(p, project) for p in a["projects"]))
             ]
         return [self.public(a) for a in agents]
 
@@ -2795,24 +3007,36 @@ class Bus:
                         )
             return out[::-1]
 
-        return read_transcript(Path(path), msgs, cursor, limit, before)
+        return read_transcript(
+            Path(path),
+            msgs,
+            cursor,
+            limit,
+            before,
+            self._config.transcript_roots if self._config else None,
+        )
 
 
-def watch_agents(bus: Bus) -> None:
+def watch_agents(bus: Bus, stop: threading.Event | None = None) -> None:
     """Every WAKE_PASS_S: busy/idle from transcripts, then wake-ups for idle agents with mail. A failure is logged
     and the loop carries on (it is what keeps agents from sitting on unread mail)."""
     while True:
-        time.sleep(WAKE_PASS_S)
+        if stop is None:
+            time.sleep(WAKE_PASS_S)
+        elif stop.wait(WAKE_PASS_S):
+            return
         for step in (
             bus.forget_old,
             bus.turn_pass,
             bus.wake_pass,
         ):  # one failing step mustn't starve the others
+            if stop is not None and stop.is_set():
+                return
             try:
                 step()
             except Exception as e:  # noqa: BLE001 — printed with its traceback, not hidden; the next pass tries again
                 print(f"watch_agents: {traceback.format_exc()}", flush=True)
-                log(
+                bus.log(
                     "watch_error",
                     step=step.__name__,
                     error=f"{type(e).__name__}: {e}",
@@ -2820,7 +3044,7 @@ def watch_agents(bus: Bus) -> None:
                 )
 
 
-def sample_procs(bus: Bus) -> None:
+def sample_procs(bus: Bus, stop: threading.Event | None = None) -> None:
     """Every PROC_S seconds: each local agent's process tree (its harness pid and descendants) -> one `procs` event:
     per-agent totals and busiest processes, plus processes that started or ended since the last sample."""
     hz: int = os.sysconf("SC_CLK_TCK")
@@ -2830,7 +3054,10 @@ def sample_procs(bus: Bus) -> None:
     known: dict[tuple[int, int], str] = {}  # (pid, start) -> agent, for "ended"
     last: float = time.time()
     while True:
-        time.sleep(PROC_S)
+        if stop is None:
+            time.sleep(bus.config.process_interval)
+        elif stop.wait(bus.config.process_interval):
+            return
         try:
             procs: dict[int, dict[str, Any]] = proc_table()
         except OSError as e:  # e.g. a transient /proc permission error: printed, and the next sample tries again
@@ -2913,7 +3140,7 @@ def sample_procs(bus: Bus) -> None:
             bus.procs_now = agents
         if agents or ended:
             try:
-                log("procs", agents=agents, started=started, ended=ended)
+                bus.log("procs", agents=agents, started=started, ended=ended)
             except (
                 OSError
             ) as e:  # e.g. a full disk: printed, and the next sample tries again
@@ -3025,16 +3252,18 @@ def read_events(
     generation: str = "",
     procs_totals: bool = False,
     from_ts: float | None = None,
+    config: BusConfig | None = None,
 ) -> dict[str, Any]:
     """Raw event log from byte offset `since` (optionally only some event types). `next` is where to continue.
     procs_totals: procs events are cut to their totals (see `totals`).
     from_ts (with since 0): start with the checkpoint for that time (checkpoints.py) and continue at its cut,
     instead of reading from byte 0; `from` says which UTC midnight the checkpoint stands for."""
-    if not LOG_FILE.exists():
+    resource = config if config is not None else BusConfig.legacy()
+    if not resource.log_file.exists():
         return {"events": [], "next": 0, "generation": "missing"}
     events: list[dict[str, Any]] = []
     pos: int = since
-    with LOG_FILE.open("rb") as f:
+    with resource.log_file.open("rb") as f:
         stat: os.stat_result = os.fstat(f.fileno())
         current: str = f"{stat.st_dev:x}:{stat.st_ino:x}"
         if generation and generation != current:
@@ -3049,7 +3278,7 @@ def read_events(
         # the checkpoint and the read after it come from this one open file, so they describe the same log
         cp: dict[str, Any] | None = (
             checkpoints.before(
-                f, stat.st_size, current, from_ts, STATE_DIR / "checkpoints"
+                f, stat.st_size, current, from_ts, resource.state_dir / "checkpoints"
             )
             if from_ts is not None and since == 0
             else None
@@ -3100,6 +3329,7 @@ def wake_failed(
     senders: str,
     detail: str,
     error: str = "",
+    logger: Callable[..., None] | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
     """Log a failed wake-up and give the wake record that says so (the console shows `detail`)."""
@@ -3107,7 +3337,7 @@ def wake_failed(
         "via": w.get("transport", ""),
         "fallback": w.get("fallback", ""),
     }
-    log(
+    (logger or log)(
         "wake",
         agent=name,
         sender=senders,
@@ -3121,9 +3351,10 @@ def wake_failed(
 CODEX_DOWN_S: float = 60.0  # a daemon that doesn't answer (restarting, updating) is retried this long before failed
 
 
-def ntfy(m: Message) -> None:
+def ntfy(m: Message, url: str | None = None) -> None:
     """Push to the self-hosted ntfy: messages to you loudly, broadcasts normally, everything else silently."""
-    if not NTFY_URL:
+    url = NTFY_URL if url is None else url
+    if not url:
         return
     kinds: set[str] = {t["kind"] for t in m["to"]}
     topic: str = "arke-human" if "human" in kinds else "arke"
@@ -3136,7 +3367,7 @@ def ntfy(m: Message) -> None:
         # in the thread: the message is already committed, so a bad ntfy_url only gets printed
         try:
             req: urllib.request.Request = urllib.request.Request(
-                f"{NTFY_URL}/{topic}",
+                f"{url}/{topic}",
                 data=m["text"].encode(),
                 method="POST",
                 headers={
@@ -3180,6 +3411,195 @@ class BusHTTPServer(ThreadingHTTPServer):
     request_queue_size: int = 128
 
 
+def dispatch(
+    bus: Bus,
+    method: str,
+    path: str,
+    query: dict[str, list[str]],
+    body: dict[str, Any],
+    headers: Any,
+) -> tuple[int, Any, str]:
+    """Shared bus routes for the original HTTP server and the optional ASGI dashboard.
+
+    The caller authenticates and bounds the body before dispatching. Bus identity and
+    helper restrictions remain here so all HTTP frontends use the same rules.
+    """
+    sid, as_name = headers.get("X-Agent-Session", ""), headers.get("X-Agent-As", "")
+    helper, tmux = headers.get("X-Agent-Helper", ""), headers.get("X-Agent-Tmux", "")
+    if helper:
+        if not sid or not HELPER_RE.fullmatch(helper):
+            raise HttpError(
+                400, "helper requests require a parent session and a valid helper ID"
+            )
+        if method != "GET" and not (
+            method == "POST" and path in ("/send", "/helper/send")
+        ):
+            raise HttpError(
+                403, "sub-agents have read-only access; sends go only to their parent"
+            )
+    page = PAGES.get(path) if method == "GET" else None
+    q = {k: v[0] for k, v in query.items()}
+    parts = [unquote(p) for p in path.strip("/").split("/")]
+    if page is not None:  # read per request: iterate on the pages without restarting
+        root = bus.config.assets_dir or ASSETS
+        f: Path = (
+            assets.directory(root) if path.startswith("/vendor/") else WEB
+        ) / page
+        if not f.is_file():
+            raise HttpError(
+                404,
+                f"{page} missing; install dashboard assets with python -m arke.assets install --directory PATH (checkout: make setup-assets; legacy: install-service.py --assets-only)",
+            )
+        return (
+            200,
+            f.read_bytes(),
+            f"{mimetypes.guess_type(page)[0]}; charset=utf-8",
+        )
+    match method, parts:
+        case "GET", ["help"]:
+            text: str = (
+                (HERE / "help.md")
+                .read_text()
+                .replace("{client}", "<clone>/arke/client.py")
+                .replace("{dir}", "<clone>/arke")
+            )
+            return (200, text.encode(), "text/plain; charset=utf-8")
+        case "GET", ["git"]:
+            cwd: Path | None = bus.local_path(q.get("cwd", ""))
+            if cwd is None or not cwd.is_dir():
+                raise HttpError(
+                    400,
+                    f"cwd must be a local agent's working directory (or inside one) on {LOCAL_HOST}",
+                )
+            out = git_log(
+                cwd,
+                float(q.get("since", 0)),
+                max(1, min(int(q.get("limit", 200)), 2000)),
+            )
+        case "GET", [
+            "machine"
+        ]:  # the bus host's size, for scaling per-process shares in analytics
+            mem_kb: int = int(
+                Path("/proc/meminfo").read_text().split()[1]
+            )  # first line: MemTotal: N kB
+            out = {
+                "host": LOCAL_HOST,
+                "cores": os.cpu_count(),
+                "mem_total_mb": mem_kb // 1024,
+            }
+        case "GET", ["horatio", "history"]:
+            if not bus.config.horatio_url:
+                raise HttpError(
+                    404,
+                    "horatio is not configured (set [server].horatio_url)",
+                )
+            try:
+                with urllib.request.urlopen(
+                    f"{bus.config.horatio_url}/api/history?hours={float(q.get('hours', 6))}",
+                    timeout=20,
+                ) as r:
+                    if r.headers.get_content_type() != "application/json":
+                        raise HttpError(
+                            502,
+                            f"{bus.config.horatio_url} answered {r.headers.get_content_type()}, not horatio's JSON",
+                        )
+                    return (200, r.read(), "application/json")
+            except OSError as e:
+                raise HttpError(
+                    502, f"horatio at {bus.config.horatio_url} unreachable: {e}"
+                ) from e
+        case "GET", ["fileinfo"]:
+            out = bus.file_info(q.get("path", ""))
+        case "GET", ["filesizes"]:
+            out = bus.file_sizes(query.get("path", []))
+        case "GET", ["events"]:
+            if q.get("procs", "") not in ("", "totals"):
+                raise HttpError(400, "procs must be totals or absent")
+            from_ts: float | None = float(q["from"]) if "from" in q else None
+            if from_ts is not None and not math.isfinite(from_ts):
+                raise HttpError(400, "from must be a finite time")
+            out = read_events(
+                max(0, int(q.get("since", 0))),
+                set(filter(None, q.get("type", "").split(","))),
+                max(1, min(int(q.get("limit", 5000)), 50000)),
+                q.get("generation", ""),
+                q.get("procs") == "totals",
+                from_ts,
+                bus._config,
+            )
+        case "POST", ["hook"]:
+            out = bus.hook(body)
+        case "GET", ["agents"]:
+            out = bus.list_agents(q.get("project", ""))
+        case "GET", ["roster"]:
+            if any(q.get(flag, "0") not in ("0", "1") for flag in ("global", "all")):
+                raise HttpError(400, "global and all must be 0 or 1")
+            out = bus.roster(
+                sid,
+                as_name,
+                tmux,
+                project=q.get("project", ""),
+                global_scope=q.get("global") == "1",
+                show_all=q.get("all") == "1",
+            )
+        case "GET", ["agents", name]:
+            with bus.cond:
+                a: Agent | None = bus.by_name(name)
+                if a is None:
+                    raise HttpError(404, f"no agent named {name!r}")
+                snapshot: dict[str, Any] = copy.deepcopy(a)
+            out = bus.public(snapshot)
+        case "GET", ["agents", name, "transcript"]:
+            out = bus.transcript(
+                name,
+                q.get("cursor", ""),
+                max(1, min(int(q.get("limit", 40)), 500)),
+                q.get("before", ""),
+            )
+        case "GET", ["projects"]:
+            out = bus.project_tree()
+        case "POST", ["projects"]:
+            out = bus.projects(sid, as_name, body, tmux)
+        case "GET", ["resolve"]:
+            to: list[str] = [t.strip() for t in q.get("to", "").split(",") if t.strip()]
+            with bus.cond:
+                out = bus.resolve(to, bus.sender(sid, as_name or "human"))
+            out["unreachable"] = bus.unreachable(out["reach"])
+        case "POST", ["send"] | ["helper", "send"]:
+            if parts == ["helper", "send"] and not helper:
+                raise HttpError(400, "helper sends require X-Agent-Helper")
+            out = bus.send(
+                as_name,
+                body | {"via": headers.get("X-Agent-Via", "")},
+                sid=sid,
+                tmux=tmux,
+                helper=helper,
+            )
+        case "GET", ["inbox"]:
+            out = bus.inbox(
+                bus.agent_for(sid, as_name, tmux),
+                float(q.get("wait", 0)),
+                bool(helper) or q.get("receipt") == "1",
+            )
+            if helper:
+                out.pop("delivery", None)
+        case "POST", ["ack"]:
+            out = bus.acknowledge(sid, as_name, body, tmux)
+        case "POST", ["wake", "wait"]:
+            out = bus.wake_wait(sid, body)
+        case "GET", ["log"]:
+            out = bus.log_view(q)
+        case "POST", ["about"]:
+            out = bus.update(sid, as_name, body, tmux)
+        case "POST", ["name"]:
+            out = bus.rename(sid, as_name, body, tmux)
+        case "POST", ["color"]:
+            out = bus.set_color(body)
+        case _:
+            raise HttpError(404, f"no route {method} {path} (see /help)")
+    return 200, out, "application/json"
+
+
 class Handler(BaseHTTPRequestHandler):
     # HTTP/1.0, the default protocol_version: one request per connection, so the unread body of a refused
     # request is never read as the next one. Keep it unless every early reply drains or closes.
@@ -3214,11 +3634,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self, method: str) -> None:
         sid: str = self.headers.get("X-Agent-Session", "")
-        as_name: str = self.headers.get("X-Agent-As", "")
         helper: str = self.headers.get("X-Agent-Helper", "")
-        tmux: str = self.headers.get(
-            "X-Agent-Tmux", ""
-        )  # caller's pane; must match the session's (see sender)
         bus: Bus = self.bus
         try:
             url: ParseResult = urlparse(self.path)
@@ -3267,7 +3683,6 @@ class Handler(BaseHTTPRequestHandler):
                         },
                     )
             query: dict[str, list[str]] = parse_qs(url.query)
-            q: dict[str, str] = {k: v[0] for k, v in query.items()}
             if helper:
                 if not sid or not HELPER_RE.fullmatch(helper):
                     raise HttpError(
@@ -3311,171 +3726,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("body must be a JSON object")
                 # JSON can spell a lone surrogate ("\\ud800"); it can't be saved, logged or served, so refuse it here
                 json.dumps(body, ensure_ascii=False).encode()
-            parts: list[str] = [unquote(p) for p in url.path.strip("/").split("/")]
         except HttpError as e:
             return self.reply(e.status, {"error": str(e)})
         except ValueError as e:
             return self.reply(400, {"error": f"bad request: {e}"})
         try:
-            if (
-                page is not None
-            ):  # read per request: iterate on the pages without restarting
-                f: Path = (ASSETS if url.path.startswith("/vendor/") else WEB) / page
-                if not f.is_file():
-                    raise HttpError(
-                        404,
-                        f"{page} missing (vendored files: run python3 install-service.py --assets-only)",
-                    )
-                return self.reply(
-                    200,
-                    f.read_bytes(),
-                    f"{mimetypes.guess_type(page)[0]}; charset=utf-8",
-                )
-            match method, parts:
-                case "GET", ["help"]:
-                    text: str = (
-                        (HERE / "help.md")
-                        .read_text()
-                        .replace("{client}", "<clone>/arke/client.py")
-                        .replace("{dir}", "<clone>/arke")
-                    )
-                    return self.reply(200, text.encode(), "text/plain; charset=utf-8")
-                case "GET", ["git"]:
-                    cwd: Path | None = bus.local_path(q.get("cwd", ""))
-                    if cwd is None or not cwd.is_dir():
-                        raise HttpError(
-                            400,
-                            f"cwd must be a local agent's working directory (or inside one) on {LOCAL_HOST}",
-                        )
-                    out = git_log(
-                        cwd,
-                        float(q.get("since", 0)),
-                        max(1, min(int(q.get("limit", 200)), 2000)),
-                    )
-                case "GET", [
-                    "machine"
-                ]:  # the bus host's size, for scaling per-process shares in analytics
-                    mem_kb: int = int(
-                        Path("/proc/meminfo").read_text().split()[1]
-                    )  # first line: MemTotal: N kB
-                    out = {
-                        "host": LOCAL_HOST,
-                        "cores": os.cpu_count(),
-                        "mem_total_mb": mem_kb // 1024,
-                    }
-                case "GET", ["horatio", "history"]:
-                    if not HORATIO_URL:
-                        raise HttpError(
-                            404,
-                            "horatio is not configured (set [server].horatio_url)",
-                        )
-                    try:
-                        with urllib.request.urlopen(
-                            f"{HORATIO_URL}/api/history?hours={float(q.get('hours', 6))}",
-                            timeout=20,
-                        ) as r:
-                            if r.headers.get_content_type() != "application/json":
-                                raise HttpError(
-                                    502,
-                                    f"{HORATIO_URL} answered {r.headers.get_content_type()}, not horatio's JSON",
-                                )
-                            return self.reply(200, r.read(), "application/json")
-                    except OSError as e:
-                        raise HttpError(
-                            502, f"horatio at {HORATIO_URL} unreachable: {e}"
-                        ) from e
-                case "GET", ["fileinfo"]:
-                    out = bus.file_info(q.get("path", ""))
-                case "GET", ["filesizes"]:
-                    out = bus.file_sizes(query.get("path", []))
-                case "GET", ["events"]:
-                    if q.get("procs", "") not in ("", "totals"):
-                        raise HttpError(400, "procs must be totals or absent")
-                    from_ts: float | None = float(q["from"]) if "from" in q else None
-                    if from_ts is not None and not math.isfinite(from_ts):
-                        raise HttpError(400, "from must be a finite time")
-                    out = read_events(
-                        max(0, int(q.get("since", 0))),
-                        set(filter(None, q.get("type", "").split(","))),
-                        max(1, min(int(q.get("limit", 5000)), 50000)),
-                        q.get("generation", ""),
-                        q.get("procs") == "totals",
-                        from_ts,
-                    )
-                case "POST", ["hook"]:
-                    out = bus.hook(body)
-                case "GET", ["agents"]:
-                    out = bus.list_agents(q.get("project", ""))
-                case "GET", ["roster"]:
-                    if any(
-                        q.get(flag, "0") not in ("0", "1") for flag in ("global", "all")
-                    ):
-                        raise HttpError(400, "global and all must be 0 or 1")
-                    out = bus.roster(
-                        sid,
-                        as_name,
-                        tmux,
-                        project=q.get("project", ""),
-                        global_scope=q.get("global") == "1",
-                        show_all=q.get("all") == "1",
-                    )
-                case "GET", ["agents", name]:
-                    with bus.cond:
-                        a: Agent | None = bus.by_name(name)
-                        if a is None:
-                            raise HttpError(404, f"no agent named {name!r}")
-                        snapshot: dict[str, Any] = copy.deepcopy(a)
-                    out = bus.public(snapshot)
-                case "GET", ["agents", name, "transcript"]:
-                    out = bus.transcript(
-                        name,
-                        q.get("cursor", ""),
-                        max(1, min(int(q.get("limit", 40)), 500)),
-                        q.get("before", ""),
-                    )
-                case "GET", ["projects"]:
-                    out = bus.project_tree()
-                case "POST", ["projects"]:
-                    out = bus.projects(sid, as_name, body, tmux)
-                case "GET", ["resolve"]:
-                    to: list[str] = [
-                        t.strip() for t in q.get("to", "").split(",") if t.strip()
-                    ]
-                    with bus.cond:
-                        out = bus.resolve(to, bus.sender(sid, as_name or "human"))
-                    out["unreachable"] = bus.unreachable(out["reach"])
-                case "POST", ["send"] | ["helper", "send"]:
-                    if parts == ["helper", "send"] and not helper:
-                        raise HttpError(400, "helper sends require X-Agent-Helper")
-                    out = bus.send(
-                        as_name,
-                        body | {"via": self.headers.get("X-Agent-Via", "")},
-                        sid=sid,
-                        tmux=tmux,
-                        helper=helper,
-                    )
-                case "GET", ["inbox"]:
-                    out = bus.inbox(
-                        bus.agent_for(sid, as_name, tmux),
-                        float(q.get("wait", 0)),
-                        bool(helper) or q.get("receipt") == "1",
-                    )
-                    if helper:
-                        out.pop("delivery", None)
-                case "POST", ["ack"]:
-                    out = bus.acknowledge(sid, as_name, body, tmux)
-                case "POST", ["wake", "wait"]:
-                    out = bus.wake_wait(sid, body)
-                case "GET", ["log"]:
-                    out = bus.log_view(q)
-                case "POST", ["about"]:
-                    out = bus.update(sid, as_name, body, tmux)
-                case "POST", ["name"]:
-                    out = bus.rename(sid, as_name, body, tmux)
-                case "POST", ["color"]:
-                    out = bus.set_color(body)
-                case _:
-                    raise HttpError(404, f"no route {method} {url.path} (see /help)")
+            status, out, ctype = dispatch(
+                bus, method, url.path, query, body, self.headers
+            )
+            return self.reply(status, out, ctype)
         except HttpError as e:
             return self.reply(e.status, {"error": str(e)})
         except (KeyError, ValueError, OverflowError) as e:
@@ -3487,7 +3746,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 — a server bug: printed with its traceback, and answered (not a dropped connection)
             traceback.print_exc()
             return self.reply(500, {"error": f"server error: {type(e).__name__}: {e}"})
-        self.reply(200, out)
 
     def do_GET(self) -> None:
         self.route("GET")
@@ -3564,14 +3822,18 @@ def browser_host(host: str) -> bool:
         )
 
 
-def private_state() -> None:
+def private_state(config: BusConfig | None = None) -> None:
     """Mail, tool targets and backups are private: files made from here on are owner-only, and a state dir (or log)
     made before, with the default umask, is closed to other local users too."""
-    os.umask(0o077)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.chmod(0o700)
-    if LOG_FILE.exists():  # it may live outside the state dir (ARKE_LOG / log_file)
-        LOG_FILE.chmod(0o600)
+    resource = config if config is not None else BusConfig.legacy()
+    if config is None:
+        os.umask(0o077)
+    resource.state_dir.mkdir(parents=True, exist_ok=True)
+    resource.state_dir.chmod(0o700)
+    if (
+        resource.log_file.exists()
+    ):  # it may live outside the state dir (ARKE_LOG / log_file)
+        resource.log_file.chmod(0o600)
 
 
 def tailscale_ip() -> str:
@@ -3580,16 +3842,17 @@ def tailscale_ip() -> str:
     ).stdout.split()[0]
 
 
-def refuse_empty_start() -> None:
+def refuse_empty_start(config: BusConfig | None = None) -> None:
     """Exit instead of quietly starting an empty bus next to existing state (a forgotten migration or env rename,
     a database moved aside): new message ids would collide with the old ones."""
+    resource = config if config is not None else BusConfig.legacy()
     stale: list[str] = sorted(k for k in os.environ if k.startswith("AGENTBUS_"))
     if stale:
         raise SystemExit(
             f"{', '.join(stale)} set: remove legacy settings after migrating state; "
             "do not carry old AGENTBUS_DIR/AGENTBUS_LOG paths into the new service"
         )
-    database: Path = STATE_DIR / "state.sqlite3"
+    database: Path = resource.state_dir / "state.sqlite3"
     if (
         database.exists() and database.stat().st_size
     ):  # an emptied file is not a database
@@ -3599,17 +3862,19 @@ def refuse_empty_start() -> None:
     )  # an explicit ARKE_DIR is a new bus on purpose
     found: list[Path] = [
         p
-        for p in [LOG_FILE, STATE_DIR / "state.json"]
+        for p in [resource.log_file, resource.state_dir / "state.json"]
         + (
             []
-            if os.environ.get("ARKE_DIR") or "state_dir" in SETTINGS
+            if config is not None
+            or os.environ.get("ARKE_DIR")
+            or "state_dir" in resource.values
             else [old / "state.sqlite3", old / "state.json"]
         )
         if p.exists()
     ]
     if found:
         raise SystemExit(
-            f"no database at {STATE_DIR / 'state.sqlite3'}, but {', '.join(map(str, found))} exists, so this bus "
+            f"no database at {resource.state_dir / 'state.sqlite3'}, but {', '.join(map(str, found))} exists, so this bus "
             "has run before and a new one would reuse its message ids. Moving from agentbus: run its migration "
             "script (migrate_from_agentbus.py). Otherwise restore a backup (see DOCS.md), "
             "or move those files aside to start an empty bus."

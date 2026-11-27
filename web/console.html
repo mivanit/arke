@@ -389,7 +389,7 @@ pre code { border: 0; padding: 0; background: none; }
 <header class="top">
   <h1><a href="#">arke</a></h1>
   <span class="host" id="host"></span>
-  <nav class="nav" aria-label="Pages"><a href="#" aria-current="page">console</a><a id="analytics" href="/analytics" title="Who was doing what and when: activity, files, messages, tokens, processes">analytics</a><a id="analytics3d" href="/analytics3d" title="The same history in 3D: the files as a city, the agents as columns through time">3D</a></nav>
+  <nav class="nav" aria-label="Pages"><a id="managed-link" hidden href="conversations">agents</a><a href="#" aria-current="page">console</a><a id="analytics" href="/analytics" title="Who was doing what and when: activity, files, messages, tokens, processes">analytics</a><a id="analytics3d" href="/analytics3d" title="The same history in 3D: the files as a city, the agents as columns through time">3D</a></nav>
   <button class="waiting" id="waiting" type="button" hidden title="Messages to you that you haven't answered: click to see them"></button>
   <span class="netstat wait" id="netstat" role="status" data-tip="">connecting</span>
   <span class="conn" id="conn" role="status"></span>
@@ -1379,7 +1379,7 @@ function renderAgent(a) {
         <div><dt>Directory</dt><dd class="lclip" data-tip="${esc(a.cwd)}"><bdi>${esc(a.cwd) || "–"}</bdi></dd></div>
         <div><dt>Mail</dt><dd data-tip="${esc(a.unread ? "unread: " + (a.unread_ids || []).map(i => "#" + i).join(" ") : "nothing unread")}">${a.unread ? `${a.unread} unread` : "all read"}</dd></div>
         ${a.wake?.status ? `<div><dt>Wake-up</dt><dd class="wk ${esc(a.wake.status)}" data-tip="${esc(`${a.wake.detail || ""} (${clock(a.wake.at)}${a.wake.tries ? `, tried ${a.wake.tries}×` : ""})`)}">${esc(a.wake.status)} · ${hm(t - a.wake.at) === "now" ? "now" : hm(t - a.wake.at) + " ago"}</dd></div>` : ""}
-      </dl>`;
+      </dl>${a.managed ? `<a class="btn" href="conversations#${encodeURIComponent(a.managed)}">Open conversation</a>` : ""}`;
   }
   if (changed("files", a.files)) {
     const files = a.files || [];

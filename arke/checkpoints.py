@@ -24,8 +24,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from client import load_cache, save_cache
-from transcripts import tail_fp, whole_lines
+if __package__:
+    from .client import load_cache, save_cache
+else:
+    from client import load_cache, save_cache
+if __package__:
+    from .transcripts import tail_fp, whole_lines
+else:
+    from transcripts import tail_fp, whole_lines
 
 DAY: float = 86400.0
 # Every event of these types is kept: identity (names, sessions, projects) plus the small types whose whole
