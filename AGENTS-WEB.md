@@ -15,6 +15,10 @@ The bus remains usable through its existing commands. OpenCode and Antigravity a
 
 ## Run the standalone app
 
+The [standalone agent example](examples/standalone/README.md) runs a standalone,
+persistent, browser-interactable agent on its own port. It includes installation
+recipes and SQLite inventory tools as one example application. It uses no bus or dashboard.
+
 ```bash
 uv sync --locked --all-extras
 uv run --locked --all-extras arke-web --config agents.example.toml
@@ -55,7 +59,7 @@ Technical subscription support is separate from whether a personal plan permits 
 service for several people. Review the provider's terms for that deployment. Arke does not
 provide a token broker or account-sharing mechanism.
 
-## A shared household assistant
+## Share a standalone, persistent, browser-interactable agent
 
 Use `shared.agent.example.toml` for a separate shared service. It has its own port setting,
 state, selected workspace, and native home. Set `shared_profile` to its container profile and
@@ -113,7 +117,7 @@ subscription login, so tools inside its worker may read credentials in that work
 home. A dedicated home limits what is exposed; it does not hide those credentials from the
 worker. Do not mount the owner's whole home or reuse private native session history.
 
-Supply household database operations as MCP tools in the profile; the standalone service
+Supply application operations as MCP tools in the profile; the standalone service
 needs no bus. Your application should own database validation and transactions. Configure
 paths and endpoints that are available inside the worker. Agent interruption is not a rollback
 of writes already performed.
@@ -143,7 +147,7 @@ rejected; broadcasts and project posts skip it. Retrying an already accepted
 message still returns its original receipt. **Show archived** reveals archived
 conversations; their direct links also remain usable. **Restore** leaves the
 conversation paused. Removed launch profiles do not prevent archive or restore,
-but must be restored before execution resumes. The shared household conversation
+but must be restored before execution resumes. The shared conversation
 cannot be archived.
 
 Paused agents keep unread mail in the bus inbox without creating new chat requests.
@@ -353,7 +357,7 @@ uv run --locked --all-extras arke-web --config shared.agent.example.toml
 For Codex, change the example profile's harness to `codex`; use the same login command with
 `--entrypoint codex` and arguments `login --device-auth`. No credentials are built into the
 image. Read `.local/shared-state/owner.key` locally for administration, and distribute only
-the separate chat key to household users.
+the separate chat key to chat users.
 
 The host service needs access to a local Docker daemon. It starts workers with a read-only
 image, separate process namespace, dropped capabilities, no privilege escalation, resource
@@ -429,7 +433,22 @@ uv run --locked --all-extras python -m tests.subscription_smoke codex --cwd /pat
 These commands consume real subscription capacity and write native history. They require an
 existing native login. The smoke check verifies a fresh random marker in the response, recall
 on a follow-up, and recall after closing and resuming through a fresh adapter. Native approval
-and interrupt behavior still require an acceptance pass against the supported CLI versions.
+and interrupt behavior are covered by the separate browser check below for Codex.
+
+For a real Codex browser lifecycle check, install browser dependencies with
+`make setup-browser`, then explicitly opt in:
+
+```bash
+uv run --locked --all-extras python -m tests.subscription_web --use-subscription
+```
+
+This consumes four native turns. It checks owner approval across a browser reload,
+queueing, graceful stop, immediate interruption, fresh-worker and service-restart
+recall, and archive/restore. It copies only the existing Codex `auth.json` into a
+private temporary directory under `.temp/subscription-web/`, and removes the copy
+and test history on exit. It does not change the source native home or use API keys.
+Use `--codex-home` to select a different source login or `--model` to select a model.
+This check is never invoked by pytest, `make check`, or CI.
 
 To check a real subscription through the production container runner, use a dedicated
 native home already signed in as described in the container setup above. Both the workspace

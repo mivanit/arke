@@ -13,6 +13,7 @@ for line in sys.stdin:
     if method == "initialize":
         result = {"userAgent": "fixture"}
     elif method == "account/read":
+        assert message["params"] == {"refreshToken": False}
         result = {"account": {"type": "chatgpt"}, "requiresOpenaiAuth": True}
     elif method == "config/read":
         result = {"config": {"model_provider": "openai", "forced_login_method": "chatgpt"}}

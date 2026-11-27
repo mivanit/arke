@@ -27,6 +27,6 @@ cwd = "."
 instructions = ""
 
 # Application-owned tools are ordinary MCP servers, available without the bus:
-# [profiles.claude.mcp_servers.household]
+# [profiles.claude.mcp_servers.application]
 # command = "/absolute/path/to/python"
 # args = ["/absolute/path/to/database_tools.py"]

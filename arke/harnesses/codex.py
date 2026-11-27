@@ -182,7 +182,9 @@ class Codex:
             "config/read", {"cwd": str(self.launch.cwd), "includeLayers": False}
         )
         subscription_config(effective.get("config", {}))
-        account = await self._call("account/read", {"refreshToken": True})
+        # Inspect the managed login without forcing OAuth rotation on every
+        # worker start. Codex owns refresh when needed for native requests.
+        account = await self._call("account/read", {"refreshToken": False})
         if (account.get("account") or {}).get("type") != "chatgpt":
             raise SubscriptionRequired(
                 "Codex needs a ChatGPT subscription login; run codex login on the host"

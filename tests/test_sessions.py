@@ -359,7 +359,7 @@ def test_sharing_creates_fresh_persisted_identity(tmp_path: Path) -> None:
         manager._record(
             private, "secret", Event("message", {"text": "private fixture"})
         )
-        shared = manager.get_or_create_shared("code", "Household")
+        shared = manager.get_or_create_shared("code", "Standalone agent")
         assert private != shared
         assert manager.history(shared) == []
         assert manager.get_or_create_shared("code") == shared

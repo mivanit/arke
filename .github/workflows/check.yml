@@ -70,3 +70,16 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check the production image, native protocols, and container-backed web agents
         run: make test-deployment UV=.temp/ci-tools/bin/uv
+      - name: Build the standalone example and check its inventory offline
+        run: |
+          make -C examples/standalone image
+          docker run --rm --network=none --read-only --tmpfs /tmp \
+            --entrypoint /app/.venv/bin/python arke-standalone:local -B -c '
+          import runpy
+          from pathlib import Path
+          Inventory = runpy.run_path("/opt/standalone/inventory.py")["Inventory"]
+          inventory = Inventory(Path("/tmp/inventory.sqlite3"))
+          first = inventory.add_item("ci", "Lantern", "Garage", 2)
+          assert inventory.add_item("ci", "Lantern", "Garage", 2) == first
+          assert len(inventory.list_items()["items"]) == 1
+          print("Standalone image inventory passed without network or credentials")'

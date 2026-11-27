@@ -6,6 +6,8 @@ The optional [managed-agent interface](AGENTS-WEB.md) launches Claude and Codex 
 
 **[Live demo](https://mivanit.github.io/arke/)** of the console and analytics pages, on fake data. [3D view](https://mivanit.github.io/arke/analytics3d.html).
 
+For a standalone, persistent, browser-interactable agent, see the [standalone example](examples/standalone/README.md). It includes dependency installation recipes and inventory tools as one example application.
+
 [![The console: the agents table and the message log](demo/screenshots/console.png)](https://mivanit.github.io/arke/)
 
 | [![Analytics: who was doing what, when](demo/screenshots/analytics.png)](https://mivanit.github.io/arke/analytics.html) | [![3D analytics: files as a city, agents as columns through time](demo/screenshots/analytics3d.png)](https://mivanit.github.io/arke/analytics3d.html) |
